@@ -6,7 +6,7 @@ from scipy.spatial.distance import cdist
 from data import S2SDataset
 
 
-def partition_to_subgoal(dataset: S2SDataset) -> list[S2SDataset]:
+def partition_to_subgoal(dataset: S2SDataset) -> dict[tuple[int, int], S2SDataset]:
     """
     Partition a dataset such that each partition corresponds to a subgoal.
 
