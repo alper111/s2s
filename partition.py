@@ -103,6 +103,19 @@ def _merge_partitions(partitions: list[S2SDataset]) -> list[S2SDataset]:
 
 
 def _partition(x: np.ndarray) -> dict[int, list]:
+    """
+    Partition a given numpy array with x-means clustering.
+
+    Parameters
+    ----------
+    x : np.ndarray
+        A numpy array to be partitioned.
+
+    Returns
+    -------
+    partitions : dict[int, list]
+        A dictionary of partitioned indices.
+    """
     # TODO: make this portion deep?
     _, labels, _ = _x_means(x, 1, 50)
     partitions = {}
@@ -114,6 +127,27 @@ def _partition(x: np.ndarray) -> dict[int, list]:
 
 
 def _k_means(x, k, centroids=None):
+    """
+    Perform k-means clustering.
+
+    Parameters
+    ----------
+    x : np.ndarray
+        A numpy array to be clustered.
+    k : int
+        The number of clusters.
+    centroids : np.ndarray, optional
+        Initial centroids.
+
+    Returns
+    -------
+    centroids : np.ndarray
+        The final centroids.
+    assigns : np.ndarray
+        The cluster assignments.
+    mse : float
+        The mean squared error.
+    """
     if centroids is None:
         centroids = np.zeros((k, x.shape[1]))
         prev_assigns = np.random.randint(0, k, x.shape[0])
@@ -135,6 +169,21 @@ def _k_means(x, k, centroids=None):
 
 
 def _bic(x, mu):
+    """
+    Compute the Bayesian Information Criterion (BIC).
+
+    Parameters
+    ----------
+    x : np.ndarray
+        A numpy array of data points.
+    mu : np.ndarray
+        A numpy array of centroids.
+
+    Returns
+    -------
+    bic : float
+        The Bayesian Information Criterion.
+    """
     K = mu.shape[0]
     M = mu.shape[1]
     N = x.shape[0]
@@ -149,10 +198,26 @@ def _bic(x, mu):
     logl = (R * np.log(R+1e-12) - R * np.log(N) - 0.5 * R * M *
             np.log(2 * np.pi * variance+1e-12) - 0.5 * (R-1) / M).sum()
     complexity = 0.5 * K * (M+1) * np.log(N)
-    return logl - complexity
+    bic = logl - complexity
+    return bic
 
 
 def _extend_or_keep(x, mu):
+    """
+    Extend a cluster or keep it as is.
+
+    Parameters
+    ----------
+    x : np.ndarray
+        A numpy array of data points.
+    mu : np.ndarray
+        A numpy array of centroids.
+
+    Returns
+    -------
+    new_centroids : np.ndarray
+        The new centroids.
+    """
     radius = np.linalg.norm(x-mu, axis=1).max()
     direction = np.random.randn(x.shape[1])
     direction /= np.linalg.norm(direction)
@@ -169,6 +234,27 @@ def _extend_or_keep(x, mu):
 
 
 def _x_means(x, k_min, k_max):
+    """
+    Perform x-means clustering.
+
+    Parameters
+    ----------
+    x : np.ndarray
+        A numpy array to be clustered.
+    k_min : int
+        The minimum number of clusters.
+    k_max : int
+        The maximum number of clusters.
+
+    Returns
+    -------
+    centroids : np.ndarray
+        The final centroids.
+    assigns : np.ndarray
+        The cluster assignments.
+    mse : float
+        The mean squared error.
+    """
     k = k_min
     centroids = None
     while k < (k_max+1):
