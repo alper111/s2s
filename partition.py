@@ -56,7 +56,7 @@ def partition_to_subgoal(dataset: S2SDataset) -> dict[tuple[int, int], S2SDatase
     return partitions
 
 
-def _split_by_options(dataset: S2SDataset) -> list[S2SDataset]:
+def _split_by_options(dataset: S2SDataset) -> dict[int, S2SDataset]:
     """
     Split a dataset by options.
 
@@ -126,7 +126,7 @@ def _partition(x: np.ndarray) -> dict[int, list]:
     return partitions
 
 
-def _k_means(x: np.ndarray, k: int, centroids: np.ndarray = None) -> tuple[np.ndarray, np.ndarray, float]:
+def _k_means(x: np.ndarray, k: int, centroids: np.ndarray | None = None) -> tuple[np.ndarray, np.ndarray, float]:
     """
     Perform k-means clustering.
 
@@ -256,8 +256,10 @@ def _x_means(x: np.ndarray, k_min: int, k_max: int) -> tuple[np.ndarray, np.ndar
         The mean squared error.
     """
     k = k_min
-    centroids = None
+    assert k_min < k_max and k_min > 0
     while k < (k_max+1):
+        if k == k_min:
+            centroids = None
         centroids, assigns, _ = _k_means(x, k, centroids=centroids)
         centroid_list = []
         change = False
