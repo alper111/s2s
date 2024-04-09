@@ -126,7 +126,7 @@ def _partition(x: np.ndarray) -> dict[int, list]:
     return partitions
 
 
-def _k_means(x, k, centroids=None):
+def _k_means(x: np.ndarray, k: int, centroids: np.ndarray = None) -> tuple[np.ndarray, np.ndarray, float]:
     """
     Perform k-means clustering.
 
@@ -168,7 +168,7 @@ def _k_means(x, k, centroids=None):
     return centroids, next_assigns, mse
 
 
-def _bic(x, mu):
+def _bic(x: np.ndarray, mu: np.ndarray) -> float:
     """
     Compute the Bayesian Information Criterion (BIC).
 
@@ -202,7 +202,7 @@ def _bic(x, mu):
     return bic
 
 
-def _extend_or_keep(x, mu):
+def _extend_or_keep(x: np.ndarray, mu: np.ndarray) -> np.ndarray:
     """
     Extend a cluster or keep it as is.
 
@@ -233,7 +233,7 @@ def _extend_or_keep(x, mu):
         return child_centroids
 
 
-def _x_means(x, k_min, k_max):
+def _x_means(x: np.ndarray, k_min: int, k_max: int) -> tuple[np.ndarray, np.ndarray, float]:
     """
     Perform x-means clustering.
 
