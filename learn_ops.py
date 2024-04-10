@@ -1,6 +1,6 @@
 import numpy as np
 
-from structs import S2SDataset, SupportVectorClassifier, KernelDensityEstimator
+from structs import S2SDataset, SupportVectorClassifier, KernelDensityEstimator, Operator
 
 
 __author__ = 'Steve James and George Konidaris'
@@ -8,7 +8,14 @@ __author__ = 'Steve James and George Konidaris'
 # https://github.com/sd-james/skills-to-symbols/tree/master
 
 
-def learn_preconditions(subgoals: dict[tuple[int, int], S2SDataset]) -> dict[tuple[int, int], SupportVectorClassifier]:
+def learn_operators(subgoals: dict[tuple[int, int], S2SDataset]) -> list[Operator]:
+    preconditions = _learn_preconditions(subgoals)
+    effects = _learn_effects(subgoals)
+    operators = _combine(preconditions, effects)
+    return operators
+
+
+def _learn_preconditions(subgoals: dict[tuple[int, int], S2SDataset]) -> dict[tuple[int, int], SupportVectorClassifier]:
     options = list(subgoals.keys())
     preconditions = {}
     for option in options:
@@ -16,7 +23,6 @@ def learn_preconditions(subgoals: dict[tuple[int, int], S2SDataset]) -> dict[tup
         mask = np.where(np.any(dataset.mask, axis=0))[0].tolist()
         if len(mask) == 0:
             print(f"Skipping option {option} because it has no mask")
-            preconditions[option] = None
             continue
 
         data_pos = dataset.state
@@ -41,16 +47,15 @@ def learn_preconditions(subgoals: dict[tuple[int, int], S2SDataset]) -> dict[tup
     return preconditions
 
 
-def learn_effects(subgoals: dict[tuple[int, int], S2SDataset]) -> dict[tuple[int, int], KernelDensityEstimator]:
+def _learn_effects(subgoals: dict[tuple[int, int], S2SDataset]) -> dict[tuple[int, int], KernelDensityEstimator]:
     options = list(subgoals.keys())
     effects = {}
     for option in options:
-        # TODO: dataset might be a list in the probabilistic setting
+        # TODO: dataset will be a list in the probabilistic setting
         dataset = subgoals[option]
         mask = np.where(np.any(dataset.mask, axis=0))[0].tolist()
         if len(mask) == 0:
             print(f"Skipping option {option} because it has no mask")
-            effects[option] = None
             continue
 
         data = dataset.next_state
@@ -59,3 +64,14 @@ def learn_effects(subgoals: dict[tuple[int, int], S2SDataset]) -> dict[tuple[int
         effects[option] = kde
 
     return effects
+
+
+def _combine(preconditions: dict[tuple[int, int], SupportVectorClassifier],
+             effects: dict[tuple[int, int], KernelDensityEstimator]) -> list[Operator]:
+    assert sorted(preconditions.keys()) == sorted(effects.keys())
+    operators = []
+    for (option, partition) in preconditions:
+        precond = preconditions[(option, partition)]
+        effect = effects[(option, partition)]
+        operators.append(Operator(option, partition, precond, effect))
+    return operators
