@@ -3,7 +3,7 @@ from typing import Callable
 import gymnasium as gym
 import numpy as np
 
-from data import S2SDataset
+from structs import S2SDataset
 
 
 def collect(n: int, env: gym.Env, options: dict[str, Callable] | None = None) -> S2SDataset:

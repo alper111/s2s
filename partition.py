@@ -3,7 +3,7 @@ from collections import defaultdict
 import numpy as np
 from scipy.spatial.distance import cdist
 
-from data import S2SDataset
+from structs import S2SDataset
 
 
 def partition_to_subgoal(dataset: S2SDataset) -> dict[tuple[int, int], S2SDataset]:
@@ -67,7 +67,7 @@ def _split_by_options(dataset: S2SDataset) -> dict[int, S2SDataset]:
 
     Returns
     -------
-    datasets : list[S2SDataset]
+    datasets : dict[int, S2SDataset]
         A list of datasets split by options.
     """
     datasets = defaultdict(list)
