@@ -7,18 +7,17 @@ from sklearn.svm import SVC
 from sklearn.neighbors import KernelDensity
 
 
+__author__ = 'Steve James and George Konidaris'
+# Modified by Alper Ahmetoglu. Original source:
+# https://github.com/sd-james/skills-to-symbols/tree/master
+
+
 S2SDataset = NamedTuple('S2SDataset', [
     ('state', np.ndarray),
     ('option', np.ndarray),
     ('reward', np.ndarray),
     ('next_state', np.ndarray),
     ('mask', np.ndarray),
-])
-
-Operator = NamedTuple('Operator', [
-    ('name', str),
-    ('preconditions', list),
-    ('effects', list),
 ])
 
 
@@ -212,6 +211,14 @@ class KernelDensityEstimator:
         return kde
 
 
+Operator = NamedTuple('Operator', [
+    ('option', int),
+    ('partition', int),
+    ('precondition', SupportVectorClassifier),
+    ('effect', KernelDensityEstimator),  # TODO: this will be a list in the probabilistic setting
+])
+
+
 class Proposition:
     """
     A non-typed, non-lifted predicate (i.e. a proposition).
@@ -250,6 +257,9 @@ class Proposition:
         clone.sign *= -1
         return clone
 
+    def __repr__(self) -> str:
+        return self.__str__()
+
     def __str__(self):
         if self.sign < 0:
             return 'not ({})'.format(self.name)
@@ -262,8 +272,9 @@ class Proposition:
 
 class UniquePredicateList:
     """
-    A class that wraps a list. The user add density estimators to the list, and they are wrapped in PDDL predicates.
-    The list automatically deals with duplicates
+    A class that wraps a list. The user add density estimators to the list,
+    and they are wrapped in PDDL predicates.  The list automatically deals
+    with duplicates.
     """
 
     def __init__(self, comparator: Callable[[KernelDensityEstimator, KernelDensityEstimator], bool] | None = None):
@@ -277,11 +288,9 @@ class UniquePredicateList:
         """
         self._comparator = comparator if comparator is not None else lambda x, y: x is y
         self._list = []
-        self._start_preds = []
-        self._goal_preds = []
         self.__idx = 0
 
-    def append(self, item: KernelDensityEstimator, start_pred: bool = False, goal_pred: bool = False) -> Proposition:
+    def append(self, item: KernelDensityEstimator) -> Proposition:
         """
         Add an item to the list
 
@@ -289,10 +298,6 @@ class UniquePredicateList:
         ----------
         item : KernelDensityEstimator
             The item to add.
-        start_pred : bool, optional
-            Whether the proposition is part of the start distribution. Default is False.
-        goal_pred : bool, optional
-            Whether the proposition is part of the goal distribution. Default is False.
 
         Returns
         -------
@@ -302,19 +307,11 @@ class UniquePredicateList:
         """
         for x in self._list:
             if self._comparator(item, x.estimator):
-                self._add(x, start_pred, goal_pred)
                 return x
         idx = len(self._list)
         predicate = Proposition('symbol_{}'.format(idx), item)
         self._list.append(predicate)
-        self._add(predicate, start_pred, goal_pred)
         return predicate
-
-    def _add(self, x: Proposition, start_pred=False, goal_pred=False):
-        if start_pred:
-            self._start_preds.append(x)
-        if goal_pred:
-            self._goal_preds.append(x)
 
     def __iter__(self):
         self.__idx = 0
@@ -330,10 +327,56 @@ class UniquePredicateList:
     def __len__(self):
         return len(self._list)
 
-    @property
-    def start_predicates(self):
-        return self._start_preds
 
-    @property
-    def goal_predicates(self):
-        return self._goal_preds
+class ActionSchema:
+    def __init__(self, operator: Operator, name: str | None = None):
+        self.operator = operator
+
+        if name is not None:
+            self.name = name.replace(' ', '-')
+        else:
+            self.name = f"option-{self.operator.option}-partition-{self.operator.partition}"
+        self.preconditions = [Proposition.not_failed()]
+        self.effects = []
+
+    def add_preconditions(self, predicates: list[Proposition]):
+        self.preconditions.extend(predicates)
+
+    def add_effect(self, effect: list[Proposition], probability: float = 1):
+        self.effects.append((probability, effect))
+
+    def is_probabilistic(self):
+        return len(self.effects) > 1
+
+    def __str__(self):
+        precondition = _proposition_to_str(self.preconditions)
+
+        if self.is_probabilistic():
+            # Probabilistic effects not supported yet. Defaulting to the most probable effect.
+            effects = [max(self.effects, key=lambda x: x[0])]  # get most probable
+            # effects = self.effects
+        else:
+            effects = [max(self.effects, key=lambda x: x[0])]  # get most probable
+
+        if len(effects) == 1:
+            effect = _proposition_to_str(effects[0][1])
+        else:
+            # Probabilistic effects not supported yet. Defaulting to the most probable effect.
+            effect = _proposition_to_str(effects[0][1])
+
+        schema = f"(:action {self.name}\n" + \
+                 "\t:parameters ()\n" + \
+                 f"\t:precondition ({precondition})\n" + \
+                 f"\t:effect ({effect})\n)"
+        return schema
+
+
+def _proposition_to_str(proposition: Proposition | list[Proposition]) -> str:
+    if isinstance(proposition, Proposition):
+        return str(proposition)
+    elif isinstance(proposition, list):
+        assert len(proposition) > 0
+        prop_str = list(map(str, proposition))
+        if len(proposition) == 1:
+            return prop_str[0]
+        return f"(and {' '.join([f'({prop})' for prop in prop_str])})"
