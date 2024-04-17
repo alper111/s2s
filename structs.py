@@ -288,6 +288,7 @@ class UniquePredicateList:
         """
         self._comparator = comparator if comparator is not None else lambda x, y: x is y
         self._list = []
+        self.mutex_groups = None
         self.__idx = 0
 
     def append(self, item: KernelDensityEstimator) -> Proposition:
@@ -312,6 +313,23 @@ class UniquePredicateList:
         predicate = Proposition('symbol_{}'.format(idx), item)
         self._list.append(predicate)
         return predicate
+
+    def fill_mutex_groups(self, factors: list[list[int]]) -> None:
+        self.mutex_groups = [[] for _ in range(len(factors))]
+        for f_i, factor in enumerate(factors):
+            for i, pred in enumerate(self._list):
+                if set(pred.mask) == set(factor):
+                    self.mutex_groups[f_i].append(i)
+
+    def __getitem__(self, item: int | slice | list | tuple) -> Proposition | list[Proposition]:
+        if isinstance(item, int):
+            return self._list[item]
+        elif isinstance(item, slice):
+            return self._list[item]
+        elif isinstance(item, list):
+            return [self._list[i] for i in item]
+        elif isinstance(item, tuple):
+            return [self._list[i] for i in item]
 
     def __iter__(self):
         self.__idx = 0
@@ -348,6 +366,9 @@ class ActionSchema:
     def is_probabilistic(self):
         return len(self.effects) > 1
 
+    def __repr__(self) -> str:
+        return self.__str__()
+
     def __str__(self):
         precondition = _proposition_to_str(self.preconditions)
 
@@ -366,8 +387,8 @@ class ActionSchema:
 
         schema = f"(:action {self.name}\n" + \
                  "\t:parameters ()\n" + \
-                 f"\t:precondition ({precondition})\n" + \
-                 f"\t:effect ({effect})\n)"
+                 f"\t:precondition (and {precondition})\n" + \
+                 f"\t:effect (and {effect})\n)"
         return schema
 
 
@@ -377,6 +398,87 @@ def _proposition_to_str(proposition: Proposition | list[Proposition]) -> str:
     elif isinstance(proposition, list):
         assert len(proposition) > 0
         prop_str = list(map(str, proposition))
-        if len(proposition) == 1:
-            return prop_str[0]
-        return f"(and {' '.join([f'({prop})' for prop in prop_str])})"
+        return f"{' '.join([f'({prop})' for prop in prop_str])}"
+
+
+class PDDLDomain:
+    def __init__(self, name: str, vocabulary: UniquePredicateList, operators: list[ActionSchema]):
+        self.name = name
+        self.vocabulary = vocabulary
+        self.num_operators = len(operators)
+        self.operator_str = "\n\n".join([str(x) for x in operators])
+
+        self._comment = f";Automatically generated {self.name} domain PDDL file."
+        self._definition = f"define (domain {self.name})"
+        self._requirements = "\t(:requirements :strips)"
+
+    def get_active_symbols(self, observation: np.ndarray) -> list[Proposition]:
+        assert self.vocabulary.mutex_groups is not None, "Mutually exclusive factors are not defined."
+
+        active_symbols = []
+        for _, group in enumerate(self.vocabulary.mutex_groups):
+            scores = np.zeros(len(group))
+            prop = self.vocabulary[group[0]]
+            assert isinstance(prop, Proposition)
+            masked_obs = observation[prop.mask].reshape(1, -1)
+            for p_i, idx in enumerate(group):
+                prop = self.vocabulary[idx]
+                scores[p_i] = prop.estimator._kde.score_samples(masked_obs)[0]
+            active_symbols.append(group[np.argmax(scores)])
+        return active_symbols
+
+    def __str__(self):
+        symbols = f"\t\t({Proposition.not_failed()}) "
+        for i, p in enumerate(self.vocabulary):
+            symbols += f"({p})"
+            if (i+1) % 6 == 0:
+                symbols += "\n\t\t"
+            else:
+                symbols += " "
+
+        predicates = f"\t(:predicates\n{symbols}\n\t)"
+
+        description = f"{self._comment}\n({self._definition}\n{self._requirements}\n{predicates}\n\n{self.operator_str}\n)"
+        return description
+
+    def __repr__(self) -> str:
+        return f"{self._comment}\n({self._definition}\n{self._requirements}\n" + \
+               f"\t...{len(self.vocabulary)} symbols...\n\t...{self.num_operators} actions...\n)"
+
+
+class PDDLProblem:
+    def __init__(self, problem_name: str, domain_name: str):
+        self.name = problem_name
+        self.domain = domain_name
+        self.init_propositions = []
+        self.goal_propositions = []
+
+    def add_init_proposition(self, proposition: Proposition):
+        self.init_propositions.append(proposition)
+
+    def add_goal_proposition(self, proposition: Proposition):
+        self.goal_propositions.append(proposition)
+
+    def __str__(self):
+        init = ""
+        for i, p in enumerate(self.init_propositions):
+            init += f"({p})"
+            if (i+1) % 6 == 0:
+                init += "\n\t\t"
+            elif i < len(self.init_propositions) - 1:
+                init += " "
+        goal = ""
+        for i, p in enumerate(self.goal_propositions):
+            goal += f"({p})"
+            if (i+1) % 6 == 0:
+                goal += "\n\t\t"
+            elif i < len(self.goal_propositions) - 1:
+                goal += " "
+        description = f"(define (problem {self.name})\n" + \
+                      f"\t(:domain {self.domain})\n" + \
+                      f"\t(:init {init})\n" + \
+                      f"\t(:goal (and {goal}))\n)"
+        return description
+
+    def __repr__(self) -> str:
+        return self.__str__()
