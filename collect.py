@@ -3,15 +3,17 @@ from typing import Callable
 import gymnasium as gym
 import numpy as np
 
-from data import S2SDataset
+from structs import S2SDataset
 
 
-def collect(n: int, env: gym.Env, options: dict[str, Callable]) -> S2SDataset:
-    state_arr = np.zeros((n,) + env.observation_space.shape, dtype=np.float32)
+def collect(n: int, env: gym.Env, options: dict[str, Callable] | None = None) -> S2SDataset:
+    assert isinstance(env.observation_space.shape, tuple)
+    shape = (n,) + env.observation_space.shape
+    state_arr = np.zeros(shape, dtype=np.float32)
     action_arr = np.zeros(n, dtype=np.int64)
     reward_arr = np.zeros(n, dtype=np.float32)
-    next_state_arr = np.zeros((n,) + env.observation_space.shape, dtype=np.float32)
-    mask_arr = np.zeros((n,) + env.observation_space.shape, dtype=bool)
+    next_state_arr = np.zeros(shape, dtype=np.float32)
+    mask_arr = np.zeros(shape, dtype=bool)
 
     i = 0
     while i < n:
