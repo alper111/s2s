@@ -6,4 +6,4 @@ data
 out
 save
 
-.ipynb
+*.ipynb
