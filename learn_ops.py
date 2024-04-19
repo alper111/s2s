@@ -18,12 +18,44 @@ def learn_operators(subgoals: dict[tuple[int, int], S2SDataset]) -> list[Operato
 def _learn_preconditions(subgoals: dict[tuple[int, int], S2SDataset]) -> dict[tuple[int, int], SupportVectorClassifier]:
     options = list(subgoals.keys())
     preconditions = {}
+
+    ###
+    # hard code just for testing
+    # TODO: definitely remove this
+    rng = np.arange(84*84).reshape(84, 84)
+    factors = [
+        rng[:28, :28].flatten().tolist(),
+        rng[:28, 28:56].flatten().tolist(),
+        rng[:28, 56:].flatten().tolist(),
+        rng[28:56, :28].flatten().tolist(),
+        rng[28:56, 28:56].flatten().tolist(),
+        rng[28:56, 56:].flatten().tolist(),
+        rng[56:, :28].flatten().tolist(),
+        rng[56:, 28:56].flatten().tolist(),
+        rng[56:, 56:].flatten().tolist()
+    ]
+    ###
+
     for option in options:
         dataset = subgoals[option]
         mask = np.where(np.any(dataset.mask, axis=0))[0].tolist()
         if len(mask) == 0:
             print(f"Skipping option {option} because it has no mask")
             continue
+
+        ###
+        # TODO: remove this
+        found_factor = False
+        for factor_i in factors:
+            for factor_j in factors:
+                factor = factor_i + factor_j
+                if set(mask).issubset(set(factor)):
+                    mask = factor
+                    found_factor = True
+                    break
+        if not found_factor:
+            raise ValueError(f"Could not find a factor for option {option}")
+        ###
 
         data_pos = dataset.state
         n_pos = len(data_pos)
@@ -50,6 +82,24 @@ def _learn_preconditions(subgoals: dict[tuple[int, int], S2SDataset]) -> dict[tu
 def _learn_effects(subgoals: dict[tuple[int, int], S2SDataset]) -> dict[tuple[int, int], KernelDensityEstimator]:
     options = list(subgoals.keys())
     effects = {}
+
+    ###
+    # hard code just for testing
+    # TODO: definitely remove this
+    rng = np.arange(84*84).reshape(84, 84)
+    factors = [
+        rng[:28, :28].flatten().tolist(),
+        rng[:28, 28:56].flatten().tolist(),
+        rng[:28, 56:].flatten().tolist(),
+        rng[28:56, :28].flatten().tolist(),
+        rng[28:56, 28:56].flatten().tolist(),
+        rng[28:56, 56:].flatten().tolist(),
+        rng[56:, :28].flatten().tolist(),
+        rng[56:, 28:56].flatten().tolist(),
+        rng[56:, 56:].flatten().tolist()
+    ]
+    ###
+
     for option in options:
         # TODO: dataset will be a list in the probabilistic setting
         dataset = subgoals[option]
@@ -58,6 +108,19 @@ def _learn_effects(subgoals: dict[tuple[int, int], S2SDataset]) -> dict[tuple[in
             print(f"Skipping option {option} because it has no mask")
             continue
 
+        ###
+        # TODO: remove this
+        found_factor = False
+        for factor_i in factors:
+            for factor_j in factors:
+                factor = factor_i + factor_j
+                if set(mask).issubset(set(factor)):
+                    mask = factor
+                    found_factor = True
+                    break
+        if not found_factor:
+            raise ValueError(f"Could not find a factor for option {option}")
+        ###
         data = dataset.next_state
         kde = KernelDensityEstimator(mask)
         kde.fit(data)
