@@ -16,6 +16,7 @@ def build_vocabulary(operators: list[Operator], n_variables: int) \
                         dict[tuple[int, int], list[Proposition]]]:
     vocabulary = UniquePredicateList(_overlapping_dists)
     factors = _factorise(operators, n_variables)
+    print(f"Number of factors={len(factors)}")
 
     propositions = {}
     for operator in operators:
@@ -40,20 +41,14 @@ def build_schemata(factors: list[list[int]], operators: list[Operator], vocabula
                    op_propositions: dict[tuple[int, int], list[Proposition]]) -> list[ActionSchema]:
     schemata = []
     for operator in operators:
-        # print(f"Building {operator.option}-{operator.partition}")
         # in the first part, express preconditions in terms of density symbols
         pre_factors = _mask_to_factors(operator.precondition.mask, factors)
         # candidates are all possible proposition pairs that we need to consider
         # [(p1, p2, p3), (p4, p5), ...] where each element is a list of propositions
         # that change the same set of variables.
         candidates: list[list[Proposition]] = []
-        for factor in pre_factors:  # Get all symbols whose mask matches the correct factors
-            factor_cands = []
-            for proposition in vocabulary:
-                if set(proposition.mask) == set(factor):
-                    factor_cands.append(proposition)
-            candidates.append(factor_cands)
-        # print(f"Candidates: {candidates}")
+        for f_i in pre_factors:  # Get all symbols whose mask matches the correct factors
+            candidates.append(vocabulary[vocabulary.mutex_groups[f_i]])
 
         assert len(candidates) > 0, f"No candidate propositions for precond of {operator.option}-{operator.partition}"
 
@@ -300,7 +295,7 @@ def _extract_factors(mask: list[int], factors: list[list[int]]) -> list[list[int
     return ret
 
 
-def _mask_to_factors(mask: list[int], factors: list[list[int]]):
+def _mask_to_factors(mask: list[int], factors: list[list[int]]) -> list[int]:
     """
     Convert a mask to factors.
 
@@ -313,12 +308,12 @@ def _mask_to_factors(mask: list[int], factors: list[list[int]]):
 
     Returns
     -------
-    f : list[list[int]]
+    f : list[int]
         The extracted factors.
     """
     # return factors containing at least one variable present in the mask
     f = []
-    for factor in factors:
+    for i, factor in enumerate(factors):
         if not set(mask).isdisjoint(set(factor)):
-            f.append(factor)
+            f.append(i)
     return f
