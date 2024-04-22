@@ -438,7 +438,11 @@ class PDDLDomain:
 
         predicates = f"\t(:predicates\n{symbols}\n\t)"
 
-        description = f"{self._comment}\n({self._definition}\n{self._requirements}\n{predicates}\n\n{self.operator_str}\n)"
+        description = f"{self._comment}\n" + \
+                      f"({self._definition}\n" + \
+                      f"{self._requirements}\n" + \
+                      f"{predicates}\n\n" + \
+                      f"{self.operator_str}\n)"
         return description
 
     def __repr__(self) -> str:
