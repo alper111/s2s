@@ -4,7 +4,16 @@ import gymnasium as gym
 import pygame
 
 
-class MNIST8Tile(gym.Env):
+class S2SEnv(gym.Env):
+    def __init__(self) -> None:
+        super().__init__()
+        self.max_objects = 1
+
+    def get_mask(self, state, next_state):
+        raise NotImplementedError
+
+
+class MNIST8Tile(S2SEnv):
     metadata = {"render_modes": ["human", "rgb_array"], "render_fps": 4}
 
     def __init__(self, permutation=None, random=False, render_mode=None, max_steps=200):
@@ -24,7 +33,7 @@ class MNIST8Tile(gym.Env):
         self.num_class = 10
         self.max_steps = max_steps
 
-        self.observation_space = gym.spaces.Box(low=0, high=1, shape=(28*self.size, 28*self.size), dtype=np.float32)
+        self.observation_space = gym.spaces.Box(low=0, high=255, shape=(28*self.size, 28*self.size), dtype=np.uint8)
         self.action_space = gym.spaces.Discrete(4)
         self.reward_range = gym.spaces.Box(low=0, high=1, shape=(1,), dtype=np.float32)
 
@@ -67,6 +76,11 @@ class MNIST8Tile(gym.Env):
         return obs, info
 
     def step(self, action):
+        assert self.index is not None, "You must call reset() before calling step()"
+        assert self.location is not None, "You must call reset() before calling step()"
+        assert self.permutation is not None, "You must call reset() before calling step()"
+        assert self.t is not None, "You must call reset() before calling step()"
+
         row, col = self.location
         blank_idx = self.index[row, col]
 
@@ -121,6 +135,9 @@ class MNIST8Tile(gym.Env):
 
         return obs, reward, terminated, truncated, info
 
+    def get_mask(self, state, next_state):
+        return state != next_state
+
     def render(self):
         if self.render_mode == "rgb_array":
             return self._render_frame()
@@ -131,6 +148,8 @@ class MNIST8Tile(gym.Env):
             pygame.quit()
 
     def _get_obs(self):
+        assert self.index is not None, "You must call reset() before calling _get_obs()"
+
         canvas = np.zeros((self.size*28, self.size*28))
         for i in range(self.size):
             for j in range(self.size):
@@ -142,6 +161,8 @@ class MNIST8Tile(gym.Env):
         return {"location": self.location, "permutation": self.permutation}
 
     def _render_frame(self):
+        assert self.index is not None, "You must call reset() before calling _render_frame()"
+
         if self.window is None and self.render_mode == "human":
             pygame.init()
             pygame.display.init()
@@ -167,3 +188,31 @@ class MNIST8Tile(gym.Env):
             self.clock.tick(self.metadata["render_fps"])
         else:
             return np.transpose(pygame.surfarray.array3d(canvas), (1, 0, 2))
+
+
+class ObjectCentricEnv(gym.ObservationWrapper):
+    # TODO: the segmentation module will be here.
+
+    def __init__(self, env: S2SEnv):
+        super().__init__(env)
+        self.observation_space = gym.spaces.Sequence(
+            gym.spaces.Tuple(
+                (gym.spaces.Box(low=0, high=1, shape=(28*28,), dtype=np.float32),
+                 gym.spaces.Box(low=0, high=2, shape=(2,), dtype=np.int64))
+            ), stack=True
+        )
+        self.max_objects = 9
+
+    def observation(self, obs):
+        obj_feats = []
+        obj_locs = []
+        for i in range(3):
+            for j in range(3):
+                obj_feats.append(obs[i*28:(i+1)*28, j*28:(j+1)*28].flatten().astype(np.float32) / 255.0)
+                obj_locs.append([i, j])
+        obj_feats = np.stack(obj_feats)
+        obj_locs = np.stack(obj_locs)
+        return obj_feats, obj_locs
+
+    def get_mask(self, state, next_state):
+        return state != next_state
