@@ -4,11 +4,15 @@ import gymnasium as gym
 import numpy as np
 
 from structs import S2SDataset
+from environment import S2SEnv, ObjectCentricEnv
 
 
-def collect(n: int, env: gym.Env, options: dict[str, Callable] | None = None) -> S2SDataset:
-    assert isinstance(env.observation_space.shape, tuple)
-    shape = (n,) + env.observation_space.shape
+def collect(n: int, env: S2SEnv | ObjectCentricEnv, options: dict[str, Callable] | None = None) -> S2SDataset:
+    if isinstance(env.observation_space, gym.spaces.Box):
+        shape = (n,) + env.observation_space.shape
+    elif isinstance(env.observation_space, gym.spaces.Sequence):
+        assert isinstance(env.observation_space.feature_space, gym.spaces.Box)
+        shape = (n, env.max_objects) + env.observation_space.feature_space.shape
     state_arr = np.zeros(shape, dtype=np.float32)
     action_arr = np.zeros(n, dtype=np.int64)
     reward_arr = np.zeros(n, dtype=np.float32)
@@ -29,7 +33,7 @@ def collect(n: int, env: gym.Env, options: dict[str, Callable] | None = None) ->
                 # execute it in a loop till it terminates
                 pass
             next_state, reward, term, trun, _ = env.step(action)
-            opt_mask = next_state != state
+            opt_mask = env.get_mask(state, next_state)
 
             state_arr[i] = state
             action_arr[i] = action
