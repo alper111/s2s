@@ -163,14 +163,6 @@ class MNIST8Tile(S2SEnv):
     def _render_frame(self):
         assert self.index is not None, "You must call reset() before calling _render_frame()"
 
-        if self.window is None and self.render_mode == "human":
-            pygame.init()
-            pygame.display.init()
-            self.window = pygame.display.set_mode((self.size*28, self.size*28))
-
-        if self.clock is None and self.render_mode == "human":
-            self.clock = pygame.time.Clock()
-
         canvas = pygame.Surface((self.size*28, self.size*28))
         canvas.fill((0, 0, 0))
 
@@ -182,6 +174,14 @@ class MNIST8Tile(S2SEnv):
                 canvas.blit(digit, (j*28, i*28))
 
         if self.render_mode == "human":
+            if self.window is None:
+                pygame.init()
+                pygame.display.init()
+                self.window = pygame.display.set_mode((self.size*28, self.size*28))
+
+            if self.clock is None:
+                self.clock = pygame.time.Clock()
+
             self.window.blit(canvas, canvas.get_rect())
             pygame.event.pump()
             pygame.display.update()
