@@ -2,10 +2,11 @@ import numpy as np
 import torchvision
 import gymnasium as gym
 import pygame
+from scipy.spatial.distance import cdist
 
 
 class S2SEnv(gym.Env):
-    def __init__(self) -> None:
+    def __init__(self):
         super().__init__()
         self.max_objects = 1
 
@@ -215,4 +216,13 @@ class ObjectCentricEnv(gym.ObservationWrapper):
         return obj_feats, obj_locs
 
     def get_mask(self, state, next_state):
-        return state != next_state
+        # TODO
+        # normally, we need to figure out which entity maps to which one
+        # e.g., maybe with something like the Hungarian algorithm
+        feat, loc = state[:, :784], state[:, 784:]
+        feat_n, loc_n = next_state[:, :784], next_state[:, 784:]
+        indices = np.argmin(cdist(feat, feat_n), axis=-1)
+        next_loc = loc_n[indices]
+        mask = np.zeros_like(state)
+        mask[:, 784:] = loc != next_loc
+        return mask
