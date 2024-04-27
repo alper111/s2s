@@ -25,31 +25,28 @@ def partition_to_subgoal(dataset: S2SDataset) -> dict[tuple[int, int], S2SDatase
     # split by options
     option_partitions = _split_by_options(dataset)
 
+    opt_idx = 0
     # partition each option by mask and abstract effect
     for o_i, partition_k in option_partitions.items():
         # compute masked effect
         abstract_effect = (partition_k.next_state * partition_k.mask)
 
-        # partition by options' mask
-        mask_partitions = _partition(partition_k.mask.astype(float))
-
         # partition by abstract effect
+        abs_eff_partitions = _partition(abstract_effect)
+        print(f"Option {o_i} has {len(abs_eff_partitions)} abstract effects.")
         it = 0
-        for mask in mask_partitions:
-            idx_i = mask_partitions[mask]
-            eff_i = abstract_effect[idx_i]
-            eff_partitions = _partition(eff_i)
-            for eff in eff_partitions:
-                idx_j = eff_partitions[eff]
-                partition = S2SDataset(
-                    partition_k.state[idx_i][idx_j],
-                    partition_k.option[idx_i][idx_j],
-                    partition_k.reward[idx_i][idx_j],
-                    partition_k.next_state[idx_i][idx_j],
-                    partition_k.mask[idx_i][idx_j]
-                )
-                partitions[(o_i, it)] = partition
-                it += 1
+        for eff in abs_eff_partitions:
+            idx_i = abs_eff_partitions[eff]
+            partition = S2SDataset(
+                partition_k.state[idx_i],
+                partition_k.option[idx_i],
+                partition_k.reward[idx_i],
+                partition_k.next_state[idx_i],
+                partition_k.mask[idx_i]
+            )
+            partitions[(opt_idx, it)] = partition
+            it += 1
+        opt_idx += 1
 
     # TODO: merge partitions with intersecting initiation sets
     # partitions = _merge_partitions(partitions)
