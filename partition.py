@@ -114,7 +114,7 @@ def _partition(x: np.ndarray) -> dict[int, list]:
         A dictionary of partitioned indices.
     """
     # TODO: make this portion deep?
-    _, labels, _ = _x_means(x, 1, 50)
+    _, labels, _ = _x_means(x, 1, 200)
     partitions = {}
     for i in range(max(labels) + 1):
         indices = np.where(labels == i)[0].tolist()
@@ -261,7 +261,7 @@ def _x_means(x: np.ndarray, k_min: int, k_max: int) -> tuple[np.ndarray, np.ndar
         centroid_list = []
         change = False
         for i in range(k):
-            if (assigns == i).sum() < 1:
+            if (assigns == i).sum() < 3:
                 continue
             new_centroid = _extend_or_keep(x[(assigns == i)], centroids[i].reshape(1, -1))
             for m in new_centroid:
