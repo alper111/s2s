@@ -3,7 +3,7 @@ from collections import defaultdict
 import numpy as np
 from scipy.spatial.distance import cdist
 
-from structs import S2SDataset
+from structs import S2SDataset, flatten_dataset
 
 
 def partition_to_subgoal(dataset: S2SDataset) -> dict[tuple[int, int], S2SDataset]:
@@ -29,7 +29,8 @@ def partition_to_subgoal(dataset: S2SDataset) -> dict[tuple[int, int], S2SDatase
     # partition each option by mask and abstract effect
     for o_i, partition_k in option_partitions.items():
         # compute masked effect
-        abstract_effect = _get_abstract_effect(partition_k)
+        flat_dataset = flatten_dataset(partition_k)
+        abstract_effect = flat_dataset.next_state * flat_dataset.mask
 
         # partition by abstract effect
         abs_eff_partitions = _partition(abstract_effect)
@@ -82,43 +83,6 @@ def _split_by_options(dataset: S2SDataset) -> dict[int, S2SDataset]:
         dataset.mask[v]
     ) for k, v in datasets.items()}
     return datasets
-
-
-def _get_abstract_effect(partition: S2SDataset) -> np.ndarray:
-    """
-    Compute the abstract effect of a partition.
-
-    Parameters
-    ----------
-    partition : S2SDataset
-        A partitioned dataset.
-
-    Returns
-    -------
-    abstract_effect : np.ndarray
-        The abstract effect.
-    """
-    # when the state is not object-factored
-    if partition.next_state.ndim == 2:
-        return partition.next_state * partition.mask
-    # when the state is object-factored
-    elif partition.next_state.ndim == 3:
-        n_sample, n_obj, n_feat = partition.next_state.shape
-        abstract_effect = np.zeros((n_sample, n_obj*n_feat))
-        for i in range(n_sample):
-            # get the object index that the action was applied to
-            acted_obj_idx = partition.option[i][1]
-            abstract_effect[i, :n_feat] = partition.next_state[i, acted_obj_idx] * partition.mask[i, acted_obj_idx]
-            effected_objs, _ = np.where(partition.mask[i])
-            # remove the acted object from the effected objects
-            effected_objs = effected_objs[effected_objs != acted_obj_idx]
-            # permute effected obj indices for invariance
-            np.random.shuffle(effected_objs)
-            for j, o_i in enumerate(effected_objs, 1):
-                abstract_effect[i, j*n_feat:(j+1)*n_feat] = partition.next_state[i, o_i] * partition.mask[i, o_i]
-        return abstract_effect
-    else:
-        raise NotImplementedError
 
 
 def _merge_partitions(partitions: list[S2SDataset]) -> list[S2SDataset]:
