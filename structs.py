@@ -486,3 +486,75 @@ class PDDLProblem:
 
     def __repr__(self) -> str:
         return self.__str__()
+
+
+def flatten_dataset(dataset: S2SDataset) -> S2SDataset:
+    """
+    Given a dataset with object-factored states, convert it to a canonical form
+    where the state is a fixed-size vector.
+
+    Parameters
+    ----------
+    dataset : S2SDataset
+        The dataset to be converted.
+
+    Returns
+    -------
+    S2SDataset
+        The dataset with a flattened state.
+    """
+
+    # Note:
+    # This can be arbitrarily different for different domains.
+    # E.g., one can concatenate objects in an order based on the action params, or
+    # proximity to the acted object, etc. This is a domain-specific choice.
+    # For now, we implement it for domains in which the action is applied to an object,
+    # and that object is the first object in the state. Next, objects that have non-zero
+    # mask values are concatenated in a random order. Lastly, other objects are concatenated
+    # in a random order to ensure invariance to object ordering.
+
+    # if the state is not object-factored
+    if dataset.state.ndim == 2:
+        return dataset
+    elif dataset.state.ndim == 3:
+        n_sample, n_obj, n_feat = dataset.state.shape
+        state = np.zeros((n_sample, n_obj * n_feat))
+        next_state = np.zeros((n_sample, n_obj * n_feat))
+        mask = np.zeros((n_sample, n_obj * n_feat))
+        for i in range(n_sample):
+            # get the object index that the action was applied to
+            acted_obj_idx = dataset.option[i][1]
+            state[i, :n_feat] = dataset.state[i, acted_obj_idx]
+            next_state[i, :n_feat] = dataset.next_state[i, acted_obj_idx]
+            mask[i, :n_feat] = dataset.mask[i, acted_obj_idx]
+
+            # object counter
+            c = 1
+
+            # add other objects that are affected by the action
+            obj_mask = np.any(dataset.mask[i], axis=1)
+            effected_objs, = np.where(obj_mask)
+            # remove the acted object from the effected objects
+            effected_objs = effected_objs[effected_objs != acted_obj_idx]
+            # permute effected obj indices for invariance
+            np.random.shuffle(effected_objs)
+            for j, o_i in enumerate(effected_objs, c):
+                state[i, j*n_feat:(j+1)*n_feat] = dataset.state[i, o_i]
+                next_state[i, j*n_feat:(j+1)*n_feat] = dataset.next_state[i, o_i]
+                mask[i, j*n_feat:(j+1)*n_feat] = dataset.mask[i, o_i]
+            c += len(effected_objs)
+
+            # add other objects that are not affected by the action
+            uneffected_objs, = np.where(np.logical_not(obj_mask))
+            # remove the acted object from the uneffected objects
+            # this removal only happens when the acted object is also uneffected
+            uneffected_objs = uneffected_objs[uneffected_objs != acted_obj_idx]
+            # permute uneffected obj indices for invariance
+            np.random.shuffle(uneffected_objs)
+            for j, o_i in enumerate(uneffected_objs, c):
+                state[i, j*n_feat:(j+1)*n_feat] = dataset.state[i, o_i]
+                next_state[i, j*n_feat:(j+1)*n_feat] = dataset.next_state[i, o_i]
+                mask[i, j*n_feat:(j+1)*n_feat] = dataset.mask[i, o_i]
+        return S2SDataset(state, dataset.option, dataset.reward, next_state, mask)
+    else:
+        raise ValueError("Invalid state shape")
