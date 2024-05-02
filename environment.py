@@ -190,6 +190,11 @@ class ObjectCentricEnv(gym.ObservationWrapper):
         self.max_objects = 9
         self.feat_dim = 784
 
+    def reset(self, **kwargs):
+        state, info = self.env.reset(**kwargs)
+        state = self.observation(state)
+        return state, info
+
     def step(self, state, action):
         next_state, reward, term, trun, info = self.env.step(action)
         info["acted_object"] = 3*info["location"][0] + info["location"][1]
