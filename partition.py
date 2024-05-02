@@ -3,7 +3,7 @@ from collections import defaultdict
 import numpy as np
 from scipy.spatial.distance import cdist
 
-from structs import S2SDataset
+from structs import S2SDataset, sort_dataset
 
 
 def partition_to_subgoal(dataset: S2SDataset) -> dict[tuple[int, int], S2SDataset]:
@@ -29,7 +29,8 @@ def partition_to_subgoal(dataset: S2SDataset) -> dict[tuple[int, int], S2SDatase
     # partition each option by mask and abstract effect
     for o_i, partition_k in option_partitions.items():
         # compute masked effect
-        abstract_effect = (partition_k.next_state * partition_k.mask)
+        flat_dataset = sort_dataset(partition_k, mask_full_obj=False, flatten=True)
+        abstract_effect = flat_dataset.next_state * flat_dataset.mask
 
         # partition by abstract effect
         abs_eff_partitions = _partition(abstract_effect)
@@ -44,7 +45,7 @@ def partition_to_subgoal(dataset: S2SDataset) -> dict[tuple[int, int], S2SDatase
                 partition_k.next_state[idx_i],
                 partition_k.mask[idx_i]
             )
-            partitions[(opt_idx, it)] = partition
+            partitions[(opt_idx, it)] = sort_dataset(partition, mask_full_obj=False)
             it += 1
         opt_idx += 1
 
@@ -70,6 +71,9 @@ def _split_by_options(dataset: S2SDataset) -> dict[int, S2SDataset]:
     datasets = defaultdict(list)
     for i in range(len(dataset.state)):
         o_i = dataset.option[i]
+        # if the option contains object index, just use the option index
+        if isinstance(o_i, np.ndarray):
+            o_i = o_i[0]
         datasets[o_i].append(i)
     datasets = {k: S2SDataset(
         dataset.state[v],

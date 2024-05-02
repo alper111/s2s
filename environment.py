@@ -2,18 +2,10 @@ import numpy as np
 import torchvision
 import gymnasium as gym
 import pygame
+from scipy.spatial.distance import cdist
 
 
-class S2SEnv(gym.Env):
-    def __init__(self) -> None:
-        super().__init__()
-        self.max_objects = 1
-
-    def get_mask(self, state, next_state):
-        raise NotImplementedError
-
-
-class MNIST8Tile(S2SEnv):
+class MNIST8Tile(gym.Env):
     metadata = {"render_modes": ["human", "rgb_array"], "render_fps": 4}
 
     def __init__(self, permutation=None, random=False, render_mode=None, max_steps=200):
@@ -135,9 +127,6 @@ class MNIST8Tile(S2SEnv):
 
         return obs, reward, terminated, truncated, info
 
-    def get_mask(self, state, next_state):
-        return state != next_state
-
     def render(self):
         if self.render_mode == "rgb_array":
             return self._render_frame()
@@ -193,15 +182,26 @@ class MNIST8Tile(S2SEnv):
 class ObjectCentricEnv(gym.ObservationWrapper):
     # TODO: the segmentation module will be here.
 
-    def __init__(self, env: S2SEnv):
+    def __init__(self, env: gym.Env):
         super().__init__(env)
         self.observation_space = gym.spaces.Sequence(
-            gym.spaces.Tuple(
-                (gym.spaces.Box(low=0, high=1, shape=(28*28,), dtype=np.float32),
-                 gym.spaces.Box(low=0, high=2, shape=(2,), dtype=np.int64))
-            ), stack=True
+            gym.spaces.Box(low=0, high=2, shape=(28*28+2,), dtype=np.float32)
         )
         self.max_objects = 9
+        self.feat_dim = 784
+
+    def reset(self, **kwargs):
+        state, info = self.env.reset(**kwargs)
+        state = self.observation(state)
+        return state, info
+
+    def step(self, state, action):
+        next_state, reward, term, trun, info = self.env.step(action)
+        info["acted_object"] = 3*info["location"][0] + info["location"][1]
+        next_state = self.observation(next_state)
+        indices = self._match_indices(state, next_state)
+        next_state = next_state[indices]
+        return next_state, reward, term, trun, info
 
     def observation(self, obs):
         obj_feats = []
@@ -212,7 +212,14 @@ class ObjectCentricEnv(gym.ObservationWrapper):
                 obj_locs.append([i, j])
         obj_feats = np.stack(obj_feats)
         obj_locs = np.stack(obj_locs)
-        return obj_feats, obj_locs
+        new_obs = np.concatenate([obj_feats, obj_locs], axis=-1)
+        return new_obs
 
-    def get_mask(self, state, next_state):
-        return state != next_state
+    def _match_indices(self, state, next_state):
+        # TODO
+        # normally, we need to figure out which entity maps to which one
+        # e.g., maybe with something like the Hungarian algorithm
+        feat, _ = state[:, :self.feat_dim], state[:, self.feat_dim:]
+        feat_n, _ = next_state[:, :self.feat_dim], next_state[:, self.feat_dim:]
+        indices = np.argmin(cdist(feat, feat_n), axis=-1)
+        return indices
