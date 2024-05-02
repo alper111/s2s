@@ -15,47 +15,23 @@ def learn_operators(subgoals: dict[tuple[int, int], S2SDataset]) -> list[Operato
     return operators
 
 
-def _learn_preconditions(subgoals: dict[tuple[int, int], S2SDataset]) -> dict[tuple[int, int], SupportVectorClassifier]:
+def _learn_preconditions(subgoals: dict[tuple[int, int], S2SDataset]) -> \
+        dict[tuple[int, int], SupportVectorClassifier | list[SupportVectorClassifier]]:
     options = list(subgoals.keys())
     preconditions = {}
 
-    ###
-    # hard code just for testing
-    # TODO: definitely remove this
-    rng = np.arange(84*84).reshape(84, 84)
-    factors = [
-        rng[:28, :28].flatten().tolist(),
-        rng[:28, 28:56].flatten().tolist(),
-        rng[:28, 56:].flatten().tolist(),
-        rng[28:56, :28].flatten().tolist(),
-        rng[28:56, 28:56].flatten().tolist(),
-        rng[28:56, 56:].flatten().tolist(),
-        rng[56:, :28].flatten().tolist(),
-        rng[56:, 28:56].flatten().tolist(),
-        rng[56:, 56:].flatten().tolist()
-    ]
-    ###
-
     for option in options:
         dataset = subgoals[option]
-        mask = np.where(np.any(dataset.mask, axis=0))[0].tolist()
-        if len(mask) == 0:
+        any_mask = np.any(dataset.mask, axis=0)
+        if any_mask.ndim == 2:
+            obj_mask, feat_mask = np.where(any_mask)
+            n_objs = len(obj_mask)
+        else:
+            feat_mask, = np.where(any_mask)
+
+        if len(feat_mask) == 0:
             print(f"Skipping option {option} because it has no mask")
             continue
-
-        ###
-        # TODO: remove this
-        found_factor = False
-        for factor_i in factors:
-            for factor_j in factors:
-                factor = factor_i + factor_j
-                if set(mask).issubset(set(factor)):
-                    mask = factor
-                    found_factor = True
-                    break
-        if not found_factor:
-            raise ValueError(f"Could not find a factor for option {option}")
-        ###
 
         data_pos = dataset.state
         n_pos = len(data_pos)
@@ -70,67 +46,65 @@ def _learn_preconditions(subgoals: dict[tuple[int, int], S2SDataset]) -> dict[tu
             data_neg.append(sample_neg)
         data_neg = np.array(data_neg)
 
-        x = np.concatenate([data_pos, data_neg])
-        y = np.concatenate([np.ones(n_pos), np.zeros(n_pos)])
-        svm = SupportVectorClassifier(mask)
-        svm.fit(x, y)
-        preconditions[option] = svm
+        if any_mask.ndim == 1:
+            mask = np.where(any_mask)[0].tolist()
+            x = np.concatenate([data_pos, data_neg])
+            y = np.concatenate([np.ones(n_pos), np.zeros(n_pos)])
+            svm = SupportVectorClassifier(mask)
+            svm.fit(x, y)
+            preconditions[option] = svm
+        else:
+            preconditions[option] = []
+            for i in range(n_objs):
+                mask = np.where(any_mask[i])[0].tolist()
+                x = np.concatenate([data_pos[:, i], data_neg[:, i]])
+                y = np.concatenate([np.ones(n_pos), np.zeros(n_pos)])
+                svm = SupportVectorClassifier(mask)
+                svm.fit(x, y)
+                preconditions[option].append(svm)
 
     return preconditions
 
 
-def _learn_effects(subgoals: dict[tuple[int, int], S2SDataset]) -> dict[tuple[int, int], KernelDensityEstimator]:
+def _learn_effects(subgoals: dict[tuple[int, int], S2SDataset]) -> \
+        dict[tuple[int, int], KernelDensityEstimator | list[KernelDensityEstimator]]:
     options = list(subgoals.keys())
     effects = {}
-
-    ###
-    # hard code just for testing
-    # TODO: definitely remove this
-    rng = np.arange(84*84).reshape(84, 84)
-    factors = [
-        rng[:28, :28].flatten().tolist(),
-        rng[:28, 28:56].flatten().tolist(),
-        rng[:28, 56:].flatten().tolist(),
-        rng[28:56, :28].flatten().tolist(),
-        rng[28:56, 28:56].flatten().tolist(),
-        rng[28:56, 56:].flatten().tolist(),
-        rng[56:, :28].flatten().tolist(),
-        rng[56:, 28:56].flatten().tolist(),
-        rng[56:, 56:].flatten().tolist()
-    ]
-    ###
 
     for option in options:
         # TODO: dataset will be a list in the probabilistic setting
         dataset = subgoals[option]
-        mask = np.where(np.any(dataset.mask, axis=0))[0].tolist()
-        if len(mask) == 0:
+        any_mask = np.any(dataset.mask, axis=0)
+        if any_mask.ndim == 2:
+            obj_mask, feat_mask = np.where(any_mask)
+            n_objs = len(obj_mask)
+        else:
+            feat_mask, = np.where(any_mask)
+
+        if len(feat_mask) == 0:
             print(f"Skipping option {option} because it has no mask")
             continue
 
-        ###
-        # TODO: remove this
-        found_factor = False
-        for factor_i in factors:
-            for factor_j in factors:
-                factor = factor_i + factor_j
-                if set(mask).issubset(set(factor)):
-                    mask = factor
-                    found_factor = True
-                    break
-        if not found_factor:
-            raise ValueError(f"Could not find a factor for option {option}")
-        ###
-        data = dataset.next_state
-        kde = KernelDensityEstimator(mask)
-        kde.fit(data)
-        effects[option] = kde
+        if any_mask.ndim == 1:
+            mask = np.where(any_mask)[0].tolist()
+            data = dataset.next_state
+            kde = KernelDensityEstimator(mask)
+            kde.fit(data)
+            effects[option] = kde
+        else:
+            effects[option] = []
+            for i in range(n_objs):
+                mask = np.where(any_mask[i])[0].tolist()
+                data = dataset.next_state[:, i]
+                kde = KernelDensityEstimator(mask)
+                kde.fit(data)
+                effects[option].append(kde)
 
     return effects
 
 
-def _combine(preconditions: dict[tuple[int, int], SupportVectorClassifier],
-             effects: dict[tuple[int, int], KernelDensityEstimator]) -> list[Operator]:
+def _combine(preconditions: dict[tuple[int, int], SupportVectorClassifier | list[SupportVectorClassifier]],
+             effects: dict[tuple[int, int], KernelDensityEstimator | list[KernelDensityEstimator]]) -> list[Operator]:
     assert sorted(preconditions.keys()) == sorted(effects.keys())
     operators = []
     for (option, partition) in preconditions:
