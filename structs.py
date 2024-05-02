@@ -289,6 +289,7 @@ class UniquePredicateList:
         self._comparator = comparator if comparator is not None else lambda x, y: x is y
         self._list = []
         self.mutex_groups = None
+        self.factors = []
         self.__idx = 0
 
     def append(self, item: KernelDensityEstimator) -> Proposition:
@@ -320,6 +321,7 @@ class UniquePredicateList:
             for i, pred in enumerate(self._list):
                 if set(pred.mask) == set(factor):
                     self.mutex_groups[f_i].append(i)
+            self.factors.append(factor)
 
     def __getitem__(self, item: int | slice | list | tuple) -> Proposition | list[Proposition]:
         if isinstance(item, int):
