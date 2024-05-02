@@ -11,102 +11,156 @@ __author__ = 'Steve James and George Konidaris'
 
 
 def build_vocabulary(operators: list[Operator], n_variables: int) \
-               -> tuple[list[list[int]],
-                        UniquePredicateList,
-                        dict[tuple[int, int], list[Proposition]]]:
+               -> tuple[UniquePredicateList,
+                        dict[tuple[int, int], list[Proposition] | list[list[Proposition]]]]:
     vocabulary = UniquePredicateList(_overlapping_dists)
     factors = _factorise(operators, n_variables)
     print(f"Number of factors={len(factors)}")
 
     propositions = {}
-    for operator in operators:
+    for i, operator in enumerate(operators):
+        print(f"Processing operator {i}")
         predicates = []
-        op_factors = _extract_factors(operator.effect.mask, factors)
-        # the below combination is only valid if factors are independent.
-        # if factors are not independent, we need to consider all possible combinations.
-        # i.e., for comb_size in range(1, len(op_factors)-1):
-        #           for subset in combinations(op_factors, comb_size):
-        comb_size = max(1, len(op_factors) - 1)
-        for subset in combinations(op_factors, comb_size):
-            variable_subset = np.concatenate(subset).tolist()
-            marginal = operator.effect.integrate_out(variable_subset)
-            predicate = vocabulary.append(marginal)
-            predicates.append(predicate)
+        if isinstance(operator.effect, KernelDensityEstimator):
+            vocabulary, preds = _compute_possible_projections(vocabulary, operator.effect, factors)
+            predicates.extend(preds)
+        else:
+            for op_obj_eff in operator.effect:
+                vocabulary, preds = _compute_possible_projections(vocabulary, op_obj_eff, factors)
+                predicates.append(preds)
         propositions[(operator.option, operator.partition)] = predicates
     vocabulary.fill_mutex_groups(factors)
-    return factors, vocabulary, propositions
+    return vocabulary, propositions
 
 
-def build_schemata(factors: list[list[int]], operators: list[Operator], vocabulary: UniquePredicateList,
-                   op_propositions: dict[tuple[int, int], list[Proposition]]) -> list[ActionSchema]:
+def build_schemata(operators: list[Operator], vocabulary: UniquePredicateList,
+                   op_propositions: dict[tuple[int, int], list[list[Proposition]]]) -> list[ActionSchema]:
     schemata = []
     for operator in operators:
-        # in the first part, express preconditions in terms of density symbols
-        pre_factors = _mask_to_factors(operator.precondition.mask, factors)
-        # candidates are all possible proposition pairs that we need to consider
-        # [(p1, p2, p3), (p4, p5), ...] where each element is a list of propositions
-        # that change the same set of variables.
-        candidates: list[list[Proposition]] = []
-        for f_i in pre_factors:  # Get all symbols whose mask matches the correct factors
-            candidates.append(vocabulary[vocabulary.mutex_groups[f_i]])
+        action_schema = ActionSchema(operator)
 
-        assert len(candidates) > 0, f"No candidate propositions for precond of {operator.option}-{operator.partition}"
+        total_prob = 1.0
+        if isinstance(operator.precondition, list):
+            for i, obj_pre in enumerate(operator.precondition):
+                name = f"x{i}"
+                # TODO: consider something else if objects in the precondition
+                # do not match the objects in the effect.
+                # (don't know if such a case can happen)
+                eff_o = op_propositions[(operator.option, operator.partition)][i]
+                effect = operator.effect[i]
+                action_schema, prob = _fill_action_schema(action_schema, obj_pre, effect, eff_o, vocabulary, name)
+                total_prob *= prob
+        else:
+            eff_o = op_propositions[(operator.option, operator.partition)]
+            effect = operator.effect
+            action_schema, prob = _fill_action_schema(action_schema, operator.precondition, effect, eff_o, vocabulary)
+            total_prob *= prob
 
-        high_threshold = 0.95
-        # low_threshold = 0.1
-        best_prob = 0
-        best_action_schema = None
-
-        combs = product(*candidates)
-        # found = False
-        for cand_props in combs:
-            cand_props = list(cand_props)
-            prop_masks = sorted(list(chain.from_iterable([prop.mask for prop in cand_props])))
-            assert set(prop_masks) == set(operator.precondition.mask), \
-                f"why would this happen? props: {prop_masks} pre: {operator.precondition.mask}"
-
-            prob = _probability_in_precondition(cand_props, operator.precondition, allow_fill_in=True)
-            if prob > best_prob:
-                # found a match
-                # found = True
-                prob = round(prob, 3)
-                action_schema = ActionSchema(operator)
-                action_schema.add_preconditions(cand_props)
-
-                success_prob = 1.0
-                if prob < high_threshold:
-                    success_prob = prob
-                    action_schema.add_effect([Proposition.not_failed().negate()], 1-success_prob)
-
-                # TODO: there should be a loop over effects in the probabilistic case
-                eff_prob = 1 * success_prob  # the left side should be the probability of the effect
-
-                # 1. Eff(o) = Inter_i Proj(X, mask(o) \ f_i) are set to true.
-                eff_o = op_propositions[(operator.option, operator.partition)]
-
-                # 2. Propositions with mask subseteq effect.mask are set to false.
-                eff_vars = set(operator.effect.mask)
-                pre_vars = set(operator.precondition.mask)
-                neg_effects = [x for x in vocabulary if set(x.mask).issubset(eff_vars)]
-                neg_effects = [x for x in neg_effects if x not in eff_o]  # filter out propositions that are in Eff(o)
-                # 3. Propositions with mask not subseteq effect.mask and
-                #    mask intersect effect.mask is not empty are set to false.
-                # ? didn't quite understand the below one.
-                neg_effects = [x for x in neg_effects if
-                               not (set(x.mask).issubset(pre_vars) and (x not in cand_props))]
-                neg_effects = [x.negate() for x in neg_effects]
-                action_schema.add_effect(eff_o + neg_effects, eff_prob)
-
-                best_action_schema = action_schema
-                best_prob = prob
-
-        print(f"Best found with p={best_prob:.3f} for {operator.option}-{operator.partition}")
-        schemata.append(best_action_schema)
-
-        # if not found:
-        #     raise ValueError(f"Could not find a match for {operator.option}-{operator.partition}")
+        print(f"Best found with p={total_prob:.3f} for {operator.option}-{operator.partition}")
+        schemata.append(action_schema)
 
     return schemata
+
+
+def _compute_possible_projections(vocabulary: UniquePredicateList, effect: KernelDensityEstimator,
+                                  factors: list[list[int]]) -> list[KernelDensityEstimator]:
+    projections = []
+    op_factors = _extract_factors(effect.mask, factors)
+    # single factor -- the graph case
+    if len(op_factors) == 1:
+        predicate = vocabulary.append(effect)
+        projections.append(predicate)
+    # the below combination is only valid if factors are independent.
+    # if factors are not independent, we need to consider all possible combinations.
+    # i.e., for comb_size in range(1, len(op_factors)-1):
+    #           for subset in combinations(op_factors, comb_size):
+    else:
+        comb_size = len(op_factors) - 1
+        for subset in combinations(op_factors, comb_size):
+            variable_subset = np.concatenate(subset).tolist()
+            marginal = effect.integrate_out(variable_subset)
+            predicate = vocabulary.append(marginal)
+            projections.append(predicate)
+    return vocabulary, projections
+
+
+def _find_precond_propositions(vocabulary: UniquePredicateList,
+                               precondition: SupportVectorClassifier) -> tuple[list[Proposition], float]:
+    # in this part, express preconditions in terms of density symbols
+    pre_factors = _mask_to_factors(precondition.mask, vocabulary.factors)
+    # candidates are all possible proposition pairs that we need to consider
+    # [(p1, p2, p3), (p4, p5), ...] where each element is a list of propositions
+    # changing the same factor.
+    candidates = []
+    for f_i in pre_factors:
+        candidates.append(vocabulary[vocabulary.mutex_groups[f_i]])
+
+    # TODO: if such a case arises, then there is probably a factor
+    # that is not being changed by any operator but is part of the precondition.
+    # For those factor(s), we can fit a density estimator right here and then
+    # add it to the vocabulary.
+    assert len(candidates) > 0, "No candidate propositions"
+
+    best_prob = 0
+    best_cands = None
+
+    # find the best set of candidate propositions in each factor group
+    # that maximizes the probability of being in the precondition
+    # i.e., represents the precondition best
+    combs = product(*candidates)
+    for cand_props in combs:
+        cand_props = list(cand_props)
+        prop_masks = sorted(list(chain.from_iterable([prop.mask for prop in cand_props])))
+        assert set(prop_masks) == set(precondition.mask), \
+            f"why would this happen? props: {prop_masks} pre: {precondition.mask}"
+
+        prob = _probability_in_precondition(cand_props, precondition, allow_fill_in=True)
+        if prob > best_prob:
+            best_prob = prob
+            best_cands = cand_props
+
+    return best_cands, best_prob
+
+
+def _fill_action_schema(action_schema: ActionSchema, precondition: SupportVectorClassifier,
+                        effect: KernelDensityEstimator, eff_o: list[Proposition],
+                        vocabulary: UniquePredicateList, obj_name: str = "") -> ActionSchema:
+    props, prob = _find_precond_propositions(vocabulary, precondition)
+
+    prob = round(prob, 3)
+    # propositional case (i.e., no objects)
+    if obj_name == "":
+        action_schema.add_preconditions(props)
+    # object-centric version
+    else:
+        action_schema.add_obj_preconditions(obj_name, props)
+
+    success_prob = 1.0
+    # add fail effect if the probability is not high enough
+    if prob < 0.95:
+        success_prob = prob
+        action_schema.add_obj_effect(obj_name, [Proposition.not_failed().negate()], 1-success_prob)
+
+    eff_prob = 1 * success_prob
+
+    # 1. eff_o: Eff(o) = Inter_i Proj(X, mask(o) \ f_i) are set to true.
+    # 2. Propositions with mask subseteq effect.mask are set to false.
+    eff_vars = set(effect.mask)
+    pre_vars = set(precondition.mask)
+    neg_effects = [x for x in vocabulary if set(x.mask).issubset(eff_vars)]
+    neg_effects = [x for x in neg_effects if x not in eff_o]
+
+    # 3. Propositions with mask not subseteq effect.mask and
+    #    mask intersect effect.mask is not empty are set to false.
+    # ? didn't quite understand the below one.
+    neg_effects = [x for x in neg_effects if not (set(x.mask).issubset(pre_vars) and (x not in props))]
+    neg_effects = [x.negate() for x in neg_effects]
+
+    if obj_name == "":
+        action_schema.add_effect(eff_o + neg_effects, eff_prob)
+    else:
+        action_schema.add_obj_effect(obj_name, eff_o + neg_effects, eff_prob)
+    return action_schema, prob
 
 
 def _probability_in_precondition(propositions: list[Proposition], precondition: SupportVectorClassifier,
@@ -217,9 +271,10 @@ def _modifies(operators: list[Operator], n_variables: int) -> dict[int, list[int
     for x in range(n_variables):
         modifying_ops = []
         for i, operator in enumerate(operators):
-            mask = operator.effect.mask
-            if x in mask:
-                modifying_ops.append(i)  # modifies[s] -> [op1, op2, ...]
+            for eff in operator.effect:
+                if x in eff.mask:
+                    modifying_ops.append(i)  # modifies[s] -> [op1, op2, ...]
+                    break
         modifies[x] = modifying_ops
 
     return modifies
@@ -257,8 +312,8 @@ def _factorise(operators: list[Operator], n_variables: int) -> list[list[int]]:
             factors.append([i])
             options.append(modifies[i])
 
-    print("Factors\tVariables\t\tOptions\n" + '\n'.join(
-          ["F_{}\t\t{}\t{}".format(i, factors[i], options[i]) for i in range(len(factors))]))
+    for i, f_i in enumerate(factors):
+        print(f"Factor {i}: {len(f_i)} # modifying options: {len(options[i])}")
 
     return factors
 
