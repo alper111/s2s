@@ -3,7 +3,7 @@ from collections import defaultdict
 import numpy as np
 from scipy.spatial.distance import cdist
 
-from structs import S2SDataset, flatten_dataset
+from structs import S2SDataset, sort_dataset
 
 
 def partition_to_subgoal(dataset: S2SDataset) -> dict[tuple[int, int], S2SDataset]:
@@ -29,7 +29,7 @@ def partition_to_subgoal(dataset: S2SDataset) -> dict[tuple[int, int], S2SDatase
     # partition each option by mask and abstract effect
     for o_i, partition_k in option_partitions.items():
         # compute masked effect
-        flat_dataset = flatten_dataset(partition_k)
+        flat_dataset = sort_dataset(partition_k, mask_full_obj=False, flatten=True)
         abstract_effect = flat_dataset.next_state * flat_dataset.mask
 
         # partition by abstract effect
@@ -45,7 +45,7 @@ def partition_to_subgoal(dataset: S2SDataset) -> dict[tuple[int, int], S2SDatase
                 partition_k.next_state[idx_i],
                 partition_k.mask[idx_i]
             )
-            partitions[(opt_idx, it)] = partition
+            partitions[(opt_idx, it)] = sort_dataset(partition, mask_full_obj=False)
             it += 1
         opt_idx += 1
 
