@@ -358,12 +358,20 @@ class ActionSchema:
             self.name = f"option-{self.operator.option}-partition-{self.operator.partition}"
         self.preconditions = [Proposition.not_failed()]
         self.effects = []
+        self.obj_preconditions = defaultdict(list)
+        self.obj_effects = defaultdict(list)
 
     def add_preconditions(self, predicates: list[Proposition]):
         self.preconditions.extend(predicates)
 
+    def add_obj_preconditions(self, obj_idx: str, predicates: list[Proposition]):
+        self.obj_preconditions[obj_idx].extend(predicates)
+
     def add_effect(self, effect: list[Proposition], probability: float = 1):
         self.effects.append((probability, effect))
+
+    def add_obj_effect(self, obj_idx: str, effect: list[Proposition], probability: float = 1):
+        self.obj_effects[obj_idx].append((probability, effect))
 
     def is_probabilistic(self):
         return len(self.effects) > 1
