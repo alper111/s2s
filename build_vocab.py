@@ -34,7 +34,8 @@ def build_vocabulary(operators: list[Operator], n_variables: int) \
 
 
 def build_schemata(operators: list[Operator], vocabulary: UniquePredicateList,
-                   op_propositions: dict[tuple[int, int], list[list[Proposition]]]) -> list[ActionSchema]:
+                   op_propositions: dict[tuple[int, int], list[Proposition] | list[list[Proposition]]]) -> \
+                    list[ActionSchema]:
     schemata = []
     for operator in operators:
         action_schema = ActionSchema(operator)
