@@ -1,4 +1,5 @@
 from typing import NamedTuple, Callable
+from collections import defaultdict
 import copy
 
 import numpy as np
@@ -214,8 +215,8 @@ class KernelDensityEstimator:
 Operator = NamedTuple('Operator', [
     ('option', int),
     ('partition', int),
-    ('precondition', SupportVectorClassifier),
-    ('effect', KernelDensityEstimator),  # TODO: this will be a list in the probabilistic setting
+    ('precondition', list[SupportVectorClassifier]),
+    ('effect', list[KernelDensityEstimator]),  # TODO: this will be a list of list in the probabilistic setting
 ])
 
 
@@ -356,15 +357,17 @@ class ActionSchema:
             self.name = name.replace(' ', '-')
         else:
             self.name = f"option-{self.operator.option}-partition-{self.operator.partition}"
-        self.preconditions = [Proposition.not_failed()]
+        self.preconditions = []
         self.effects = []
-        self.obj_preconditions = defaultdict(list)
+        self.obj_preconditions = {}
         self.obj_effects = defaultdict(list)
 
     def add_preconditions(self, predicates: list[Proposition]):
         self.preconditions.extend(predicates)
 
     def add_obj_preconditions(self, obj_idx: str, predicates: list[Proposition]):
+        if obj_idx not in self.obj_preconditions:
+            self.obj_preconditions[obj_idx] = [Proposition.not_failed()]
         self.obj_preconditions[obj_idx].extend(predicates)
 
     def add_effect(self, effect: list[Proposition], probability: float = 1):
@@ -374,41 +377,63 @@ class ActionSchema:
         self.obj_effects[obj_idx].append((probability, effect))
 
     def is_probabilistic(self):
-        return len(self.effects) > 1
+        # TODO: no probabilistic effects for now
+        return False
+        # return len(self.effects) > 1
 
     def __repr__(self) -> str:
         return self.__str__()
 
     def __str__(self):
-        precondition = _proposition_to_str(self.preconditions)
+        precondition = ""
+        effect = ""
+        if len(self.preconditions) > 0:
+            precondition += _proposition_to_str(self.preconditions)
+        if len(self.effects) > 0:
+            effects = max(self.effects, key=lambda x: x[0])
+            effect += _proposition_to_str(effects[1], None)
+        parameters = []
+        for name in self.obj_preconditions:
+            parameters.append(name)
+            if len(precondition) > 0:
+                precondition += " "
+            precondition += _proposition_to_str(self.obj_preconditions[name], name)
 
-        if self.is_probabilistic():
-            # Probabilistic effects not supported yet. Defaulting to the most probable effect.
-            effects = [max(self.effects, key=lambda x: x[0])]  # get most probable
-            # effects = self.effects
-        else:
-            effects = [max(self.effects, key=lambda x: x[0])]  # get most probable
-
-        if len(effects) == 1:
-            effect = _proposition_to_str(effects[0][1])
-        else:
-            # Probabilistic effects not supported yet. Defaulting to the most probable effect.
-            effect = _proposition_to_str(effects[0][1])
+        for name in self.obj_effects:
+            if name not in parameters:
+                parameters.append(name)
+            if len(effect) > 0:
+                effect += " "
+            max_effect = max(self.obj_effects[name], key=lambda x: x[0])
+            effect += _proposition_to_str(max_effect[1], name)
+        parameters = " ".join([f"?{name}" for name in parameters])
 
         schema = f"(:action {self.name}\n" + \
-                 "\t:parameters ()\n" + \
+                 f"\t:parameters ({parameters})\n" + \
                  f"\t:precondition (and {precondition})\n" + \
                  f"\t:effect (and {effect})\n)"
         return schema
 
 
-def _proposition_to_str(proposition: Proposition | list[Proposition]) -> str:
+def _proposition_to_str(proposition: Proposition | list[Proposition], name: str = None) -> str:
     if isinstance(proposition, Proposition):
-        return str(proposition)
+        prop = proposition.name
+        if name is not None:
+            prop = f"{prop} ?{name}"
+        if proposition.sign < 0:
+            return f"(not ({prop}))"
     elif isinstance(proposition, list):
         assert len(proposition) > 0
-        prop_str = list(map(str, proposition))
-        return f"{' '.join([f'({prop})' for prop in prop_str])}"
+        props = []
+        for prop in proposition:
+            p = prop.name
+            if name is not None:
+                p = f"{p} ?{name}"
+            if prop.sign < 0:
+                props.append(f"(not ({p}))")
+            else:
+                props.append(f"({p})")
+        return " ".join(props)
 
 
 class PDDLDomain:
@@ -425,22 +450,47 @@ class PDDLDomain:
     def get_active_symbols(self, observation: np.ndarray) -> list[Proposition]:
         assert self.vocabulary.mutex_groups is not None, "Mutually exclusive factors are not defined."
 
-        active_symbols = []
-        for _, group in enumerate(self.vocabulary.mutex_groups):
-            scores = np.zeros(len(group))
-            prop = self.vocabulary[group[0]]
-            assert isinstance(prop, Proposition)
-            masked_obs = observation[prop.mask].reshape(1, -1)
-            for p_i, idx in enumerate(group):
-                prop = self.vocabulary[idx]
-                scores[p_i] = prop.estimator._kde.score_samples(masked_obs)[0]
-            active_symbols.append(group[np.argmax(scores)])
+        active_symbols = {}
+        if observation.ndim == 1:
+            # global observation
+            active_symbols["global"] = []
+            for _, group in enumerate(self.vocabulary.mutex_groups):
+                if len(group) == 0:
+                    continue
+
+                scores = np.zeros(len(group))
+                prop = self.vocabulary[group[0]]
+                assert isinstance(prop, Proposition)
+                masked_obs = observation[prop.mask].reshape(1, -1)
+                for p_i, idx in enumerate(group):
+                    prop = self.vocabulary[idx]
+                    scores[p_i] = prop.estimator._kde.score_samples(masked_obs)[0]
+                active_symbols["global"].append(group[np.argmax(scores)])
+        else:
+            # object-factored observation
+            for o_i in range(observation.shape[0]):
+                name = f"obj{o_i}"
+                active_symbols[name] = []
+                for _, group in enumerate(self.vocabulary.mutex_groups):
+                    if len(group) == 0:
+                        continue
+
+                    scores = np.zeros(len(group))
+                    prop = self.vocabulary[group[0]]
+                    assert isinstance(prop, Proposition)
+                    masked_obs = observation[o_i][prop.mask].reshape(1, -1)
+                    for p_i, idx in enumerate(group):
+                        prop = self.vocabulary[idx]
+                        scores[p_i] = prop.estimator._kde.score_samples(masked_obs)[0]
+                    active_symbols[name].append(group[np.argmax(scores)])
         return active_symbols
 
     def __str__(self):
-        symbols = f"\t\t({Proposition.not_failed()}) "
+        symbols = f"\t\t({Proposition.not_failed()} ?x) "
         for i, p in enumerate(self.vocabulary):
-            symbols += f"({p})"
+            # TODO: need to understand lifted propositions
+            # fixed to lifted propositions for now
+            symbols += f"({p} ?x)"
             if (i+1) % 6 == 0:
                 symbols += "\n\t\t"
             else:
@@ -467,29 +517,46 @@ class PDDLProblem:
         self.init_propositions = []
         self.goal_propositions = []
 
-    def add_init_proposition(self, proposition: Proposition):
-        self.init_propositions.append(proposition)
+    def add_init_proposition(self, proposition: Proposition, name: str = None):
+        self.init_propositions.append((proposition, name))
 
-    def add_goal_proposition(self, proposition: Proposition):
-        self.goal_propositions.append(proposition)
+    def add_goal_proposition(self, proposition: Proposition, name: str = None):
+        self.goal_propositions.append((proposition, name))
+
+    def get_object_names(self) -> list[str]:
+        obj_names = []
+        for prop, name in self.init_propositions:
+            if name is not None and name not in obj_names:
+                obj_names.append(name)
+        for prop, name in self.goal_propositions:
+            if name is not None and name not in obj_names:
+                obj_names.append(name)
+        return obj_names
 
     def __str__(self):
         init = ""
-        for i, p in enumerate(self.init_propositions):
-            init += f"({p})"
+        for i, (prop, name) in enumerate(self.init_propositions):
+            if name is not None:
+                init += f"({prop} {name})"
+            else:
+                init += f"({prop})"
             if (i+1) % 6 == 0:
                 init += "\n\t\t"
             elif i < len(self.init_propositions) - 1:
                 init += " "
         goal = ""
-        for i, p in enumerate(self.goal_propositions):
-            goal += f"({p})"
+        for i, (prop, name) in enumerate(self.goal_propositions):
+            if name is not None:
+                goal += f"({prop} {name})"
+            else:
+                goal += f"({prop})"
             if (i+1) % 6 == 0:
                 goal += "\n\t\t"
             elif i < len(self.goal_propositions) - 1:
                 goal += " "
         description = f"(define (problem {self.name})\n" + \
                       f"\t(:domain {self.domain})\n" + \
+                      f"\t(:objects {' '.join(self.get_object_names())})\n" + \
                       f"\t(:init {init})\n" + \
                       f"\t(:goal (and {goal}))\n)"
         return description
