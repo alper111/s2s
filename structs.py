@@ -131,14 +131,14 @@ class KernelDensityEstimator:
         """
         Fit the data to the effect estimator using a grid search for the hyperparameters with cross-validation.
 
-        Parameters:
+        Parameters
         ----------
         X : np.ndarray
             The data.
         **kwargs : dict
             Additional keyword arguments.
 
-        Returns:
+        Returns
         -------
         None
         """
@@ -164,12 +164,12 @@ class KernelDensityEstimator:
         """
         Sample data from the density estimator.
 
-        Parameters:
+        Parameters
         ----------
         n_samples : int, optional
             The number of samples to generate. Default is 100.
 
-        Returns:
+        Returns
         -------
         data : np.ndarray
             An array of size [n_samples, len(mask)] containing the sampled data.
@@ -184,12 +184,12 @@ class KernelDensityEstimator:
         """
         Integrate out the given variables from the distribution.
 
-        Parameters:
+        Parameters
         ----------
         variable_list : list[int]
             A list of variables to be marginalized out from the distribution.
 
-        Returns:
+        Returns
         -------
         KernelDensityEstimator
             A new distribution equal to the original distribution with the specified variables marginalized out.
