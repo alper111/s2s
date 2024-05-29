@@ -544,42 +544,33 @@ class PDDLDomain:
         self._definition = f"define (domain {self.name})"
         self._requirements = "\t(:requirements :strips)"
 
-    def get_active_symbols(self, observation: np.ndarray) -> list[Proposition]:
+    def active_symbols(self, observation: np.ndarray) -> list[Proposition]:
         assert self.vocabulary.mutex_groups is not None, "Mutually exclusive factors are not defined."
 
         active_symbols = {}
         if observation.ndim == 1:
             # global observation
-            active_symbols["global"] = []
-            for _, group in enumerate(self.vocabulary.mutex_groups):
-                if len(group) == 0:
-                    continue
-
-                scores = np.zeros(len(group))
-                prop = self.vocabulary[group[0]]
-                assert isinstance(prop, Proposition)
-                masked_obs = observation[prop.mask].reshape(1, -1)
-                for p_i, idx in enumerate(group):
-                    prop = self.vocabulary[idx]
-                    scores[p_i] = prop.estimator._kde.score_samples(masked_obs)[0]
-                active_symbols["global"].append(group[np.argmax(scores)])
+            active_symbols["global"] = self._get_active_symbols(observation)
         else:
             # object-factored observation
             for o_i in range(observation.shape[0]):
                 name = f"obj{o_i}"
-                active_symbols[name] = []
-                for _, group in enumerate(self.vocabulary.mutex_groups):
-                    if len(group) == 0:
-                        continue
+                active_symbols[name] = self._get_active_symbols(observation[o_i])
+        return active_symbols
 
-                    scores = np.zeros(len(group))
-                    prop = self.vocabulary[group[0]]
-                    assert isinstance(prop, Proposition)
-                    masked_obs = observation[o_i][prop.mask].reshape(1, -1)
-                    for p_i, idx in enumerate(group):
-                        prop = self.vocabulary[idx]
-                        scores[p_i] = prop.estimator._kde.score_samples(masked_obs)[0]
-                    active_symbols[name].append(group[np.argmax(scores)])
+    def _get_active_symbols(self, observation: np.ndarray) -> list[Proposition]:
+        active_symbols = []
+        for factor in self.vocabulary.mutex_groups:
+            group = self.vocabulary.mutex_groups[factor]
+            if len(group) == 0:
+                continue
+
+            scores = np.zeros(len(group))
+            masked_obs = observation[factor.variables].reshape(1, -1)
+            for p_i, idx in enumerate(group):
+                prop = self.vocabulary[idx]
+                scores[p_i] = prop.estimator._kde.score_samples(masked_obs)[0]
+            active_symbols.append(group[np.argmax(scores)])
         return active_symbols
 
     def __str__(self):
