@@ -399,13 +399,32 @@ class UniquePredicateList:
         self._list.append(predicate)
         return predicate
 
-    def fill_mutex_groups(self, factors: list[list[int]]) -> None:
-        self.mutex_groups = [[] for _ in range(len(factors))]
-        for f_i, factor in enumerate(factors):
+    def get_active_symbol_indices(self, observation: np.ndarray) -> np.ndarray:
+        assert self.mutex_groups is not None, "Mutually exclusive factors are not defined."
+        assert observation.ndim == 2, "Observation should be 2D: (n_batch, n_features)"
+
+        n_sample = observation.shape[0]
+        indices = np.zeros((n_sample, len(self.mutex_groups)), dtype=int)
+        for f_i, factor in enumerate(self.mutex_groups):
+            group = self.mutex_groups[factor]
+            if len(group) == 0:
+                raise ValueError("This shouldn't happen?!")
+
+            scores = np.zeros((n_sample, len(group)))
+            masked_obs = observation[:, factor.variables]
+            for p_i, idx in enumerate(group):
+                prop = self._list[idx]
+                scores[:, p_i] = prop.estimator._kde.score_samples(masked_obs)
+            indices[:, f_i] = np.argmax(scores, axis=1)
+        return indices
+
+    def fill_mutex_groups(self, factors: list[Factor]) -> None:
+        self.mutex_groups = defaultdict(list)
+        self.factors = factors
+        for factor in factors:
             for i, pred in enumerate(self._list):
-                if set(pred.mask) == set(factor):
-                    self.mutex_groups[f_i].append(i)
-            self.factors.append(factor)
+                if pred.estimator.factor == factor:
+                    self.mutex_groups[factor].append(i)
 
     def __getitem__(self, item: int | slice | list | tuple) -> Proposition | list[Proposition]:
         if isinstance(item, int):
