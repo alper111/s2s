@@ -13,13 +13,95 @@ __author__ = 'Steve James and George Konidaris'
 # https://github.com/sd-james/skills-to-symbols/tree/master
 
 
-S2SDataset = NamedTuple('S2SDataset', [
-    ('state', np.ndarray),
-    ('option', np.ndarray),
-    ('reward', np.ndarray),
-    ('next_state', np.ndarray),
-    ('mask', np.ndarray),
-])
+class Factor:
+    """
+    A factor is a minimal set of state variables that can be changed by an option.
+    """
+    def __init__(self, indices):
+        """
+        Create a new factor.
+
+        Parameters
+        ----------
+        indices : list[int]
+            The indices of the state variables that make up the factor.
+
+        Returns
+        -------
+        None
+        """
+        self._indices = indices
+
+    @property
+    def variables(self) -> list[int]:
+        return self._indices
+
+    def is_independent(self, other: 'Factor', dataset: 'S2SDataset') -> bool:
+        """
+        Check if this factor is independent of another factor in a dataset.
+
+        Parameters
+        ----------
+        other : Factor
+            The other factor.
+        dataset : S2SDataset
+            The dataset.
+
+        Returns
+        -------
+        bool
+            Whether the factors are independent.
+        """
+        # set to true for now
+        return True
+
+    def __eq__(self, other) -> bool:
+        return hash(self) == hash(other)
+
+    def __repr__(self) -> str:
+        return self.__str__()
+
+    def __str__(self) -> str:
+        return f"Factor({self._indices})"
+
+    def __hash__(self):
+        return hash(tuple(sorted(self.variables)))
+
+
+class S2SDataset:
+    def __init__(self, state: np.ndarray, option: np.ndarray, reward: np.ndarray,
+                 next_state: np.ndarray, mask: np.ndarray, factors: list[Factor] = None):
+        self.state = state
+        self.option = option
+        self.reward = reward
+        self.next_state = next_state
+        self.mask = mask
+        self._factors = factors
+
+    @property
+    def factors(self):
+        return self._factors
+
+    @factors.setter
+    def factors(self, factors):
+        self._factors = factors
+
+    def __len__(self):
+        return len(self.state)
+
+    def __getitem__(self, item):
+        return S2SDataset(self.state[item], self.option[item], self.reward[item],
+                          self.next_state[item], self.mask[item])
+
+    def __repr__(self) -> str:
+        return self.__str__()
+
+    def __str__(self) -> str:
+        n_factor = len(self.factors) if self.factors is not None else "unset"
+        if self.state.ndim == 2:
+            return f"S2SDataset(n_sample={len(self)}, n_feature={self.state.shape[1]}, n_factor={n_factor})"
+        return f"S2SDataset(n_sample={len(self)}, n_object={self.state.shape[1]}, " + \
+               f"n_feature={self.state.shape[2]}, n_factor={n_factor})"
 
 
 class SupportVectorClassifier:
