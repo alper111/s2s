@@ -1,4 +1,4 @@
-from typing import NamedTuple, Callable
+from typing import Callable
 from collections import defaultdict
 import copy
 
@@ -294,12 +294,13 @@ class KernelDensityEstimator:
         return kde
 
 
-Operator = NamedTuple('Operator', [
-    ('option', int),
-    ('partition', int),
-    ('precondition', list[SupportVectorClassifier]),
-    ('effect', list[KernelDensityEstimator]),  # TODO: this will be a list of list in the probabilistic setting
-])
+class Operator:
+    def __init__(self, option: int, partition: int, precondition: list[SupportVectorClassifier],
+                 effect: list[KernelDensityEstimator]):
+        self.option = option
+        self.partition = partition
+        self.precondition = precondition
+        self.effect = effect
 
 
 class Proposition:
