@@ -225,7 +225,12 @@ def _extend_or_keep(x: np.ndarray, mu: np.ndarray) -> np.ndarray:
     child_centroids = np.zeros((2, x.shape[1]))
     child_centroids[0] = mu + radius * direction
     child_centroids[1] = mu - radius * direction
-    child_centroids, _, _ = _k_means(x, 2, centroids=child_centroids)
+    child_centroids, assigns, _ = _k_means(x, 2, centroids=child_centroids)
+
+    # require at least 10 points in each cluster
+    if (assigns == 0).sum() < 10 or (assigns == 1).sum() < 10:
+        return mu
+
     parent_bic = _bic(x, mu)
     children_bic = _bic(x, child_centroids)
     if parent_bic > children_bic:
