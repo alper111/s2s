@@ -110,27 +110,27 @@ class SupportVectorClassifier:
     uses support vector machines with Platt scaling.
     """
 
-    def __init__(self, mask: list[int], probabilistic=True):
+    def __init__(self, factor: Factor, probabilistic=True):
         """
         Create a new SVM classifier for preconditions
 
         Parameters
         ----------
-        mask : list[int]
-            The state variables that should be kept for classification
+        factor : Factor
+            The factor that the classifier models.
         probabilistic : bool, optional
             Whether the classifier is probabilistic
         """
-        self._mask = mask
+        self._factor = factor
         self._probabilistic = probabilistic
         self._classifier: SVC | None = None
 
     @property
-    def mask(self) -> list[int]:
+    def factor(self) -> Factor:
         """
         Get the precondition mask
         """
-        return self._mask
+        return self.factor
 
     def fit(self, X, y, **kwargs):
         """
@@ -153,7 +153,7 @@ class SupportVectorClassifier:
 
         param_grid = {'gamma': gamma_range, 'C': c_range}
         grid = GridSearchCV(SVC(class_weight='balanced'), param_grid=param_grid, cv=3, n_jobs=-1)  # 3 fold CV
-        data = X[:, self.mask]
+        data = X[:, self.factor.variables]
         grid.fit(data, y)
 
         if not self._probabilistic:
@@ -185,7 +185,7 @@ class SupportVectorClassifier:
         if states.ndim == 1:
             states = states.reshape(1, -1)
 
-        masked_states = states[:, self.mask]
+        masked_states = states[:, self.factor.variables]
         if self._probabilistic:
             return np.mean(self._classifier.predict_proba(masked_states)[0][1])
         else:
@@ -194,19 +194,19 @@ class SupportVectorClassifier:
 
 class KernelDensityEstimator:
     """
-    A density estimator that models a distribution over low-level states.
+    A density estimator that models a distribution over a factor (a set of low-level states).
     """
 
-    def __init__(self, mask: list[int]):
+    def __init__(self, factor: Factor):
         """
         Initialize a new estimator.
 
         Parameters
         ----------
-        mask : list[int]
-            The state variables we care about.
+        factor : Factor
+            The factor that the estimator models.
         """
-        self._mask = mask
+        self._factor = factor
         self._kde: KernelDensity | None = None
 
     def fit(self, X: np.ndarray, **kwargs) -> None:
@@ -227,20 +227,20 @@ class KernelDensityEstimator:
         if kwargs.get('masked', False):
             data = X  # already been masked
         else:
-            data = X[:, self.mask]
+            data = X[:, self.factor.variables]
         bandwidth_range = kwargs.get('effect_bandwidth_range', np.logspace(-3, 1, 20))
         params = {'bandwidth': bandwidth_range}
         grid = GridSearchCV(KernelDensity(kernel='gaussian'), params, cv=3)
         grid.fit(data)
-        print("Best bandwidth hyperparameter: {}".format(grid.best_params_['bandwidth']))
+        # print("Best bandwidth hyperparameter: {}".format(grid.best_params_['bandwidth']))
         self._kde = grid.best_estimator_
 
     @property
-    def mask(self) -> list[int]:
+    def factor(self) -> Factor:
         """
-        Get the effect mask.
+        Get the effect factor.
         """
-        return self._mask
+        return self._factor
 
     def sample(self, n_samples=100) -> np.ndarray:
         """
@@ -321,9 +321,9 @@ class Proposition:
         return self._name
 
     @property
-    def mask(self):
+    def factor(self):
         assert isinstance(self._kde, KernelDensityEstimator)
-        return self._kde.mask
+        return self._kde.factor
 
     def sample(self, n_samples):
         assert isinstance(self._kde, KernelDensityEstimator)
@@ -372,7 +372,7 @@ class UniquePredicateList:
         self._comparator = comparator if comparator is not None else lambda x, y: x is y
         self._list = []
         self.mutex_groups = None
-        self.factors = []
+        self.factors = None
         self.__idx = 0
 
     def append(self, item: KernelDensityEstimator) -> Proposition:
