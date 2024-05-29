@@ -270,8 +270,6 @@ def _x_means(x: np.ndarray, k_min: int, k_max: int) -> tuple[np.ndarray, np.ndar
         centroid_list = []
         change = False
         for i in range(k):
-            if (assigns == i).sum() < 3:
-                continue
             new_centroid = _extend_or_keep(x[(assigns == i)], centroids[i].reshape(1, -1))
             for m in new_centroid:
                 centroid_list.append(m.tolist())
