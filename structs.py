@@ -452,13 +452,8 @@ class UniquePredicateList:
 
 
 class ActionSchema:
-    def __init__(self, operator: Operator, name: str | None = None):
-        self.operator = operator
-
-        if name is not None:
-            self.name = name.replace(' ', '-')
-        else:
-            self.name = f"option-{self.operator.option}-partition-{self.operator.partition}"
+    def __init__(self, name: str):
+        self.name = name.replace(' ', '-')
         self.preconditions = []
         self.effects = []
         self.obj_preconditions = {}
