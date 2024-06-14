@@ -17,7 +17,7 @@ class Factor:
     """
     A factor is a minimal set of state variables that can be changed by an option.
     """
-    def __init__(self, indices):
+    def __init__(self, indices: list[int]):
         """
         Create a new factor.
 
@@ -67,6 +67,14 @@ class S2SDataset:
     def factors(self, factors):
         self._factors = factors
 
+    @property
+    def is_object_factored(self) -> bool:
+        return self.state.ndim == 3
+
+    @property
+    def n_objects(self) -> int:
+        return self.state.shape[1] if self.is_object_factored else 0
+
     def __len__(self):
         return len(self.state)
 
@@ -78,9 +86,10 @@ class S2SDataset:
         return self.__str__()
 
     def __str__(self) -> str:
-        n_factor = len(self.factors) if self.factors is not None else "unset"
         if self.state.ndim == 2:
+            n_factor = len(self.factors) if self.factors is not None else "unset"
             return f"S2SDataset(n_sample={len(self)}, n_feature={self.state.shape[1]}, n_factor={n_factor})"
+        n_factor = sum([len(obj) for obj in self.factors]) if self.factors is not None else "unset"
         return f"S2SDataset(n_sample={len(self)}, n_object={self.state.shape[1]}, " + \
                f"n_feature={self.state.shape[2]}, n_factor={n_factor})"
 
@@ -90,7 +99,7 @@ class KernelDensityEstimator:
     A density estimator that models a distribution over a factor (a set of low-level states).
     """
 
-    def __init__(self, factor: Factor):
+    def __init__(self, factors: list[Factor]):
         """
         Initialize a new estimator.
 
@@ -99,7 +108,7 @@ class KernelDensityEstimator:
         factor : Factor
             The factor that the estimator models.
         """
-        self._factor = factor
+        self._factors = factors
         self._kde: KernelDensity | None = None
 
     def fit(self, X: np.ndarray, **kwargs) -> None:
@@ -120,7 +129,7 @@ class KernelDensityEstimator:
         if kwargs.get('masked', False):
             data = X  # already been masked
         else:
-            data = X[:, self.factor.variables]
+            data = X[:, self.variables]
         bandwidth_range = kwargs.get('effect_bandwidth_range', np.logspace(-3, 1, 20))
         params = {'bandwidth': bandwidth_range}
         grid = GridSearchCV(KernelDensity(kernel='gaussian'), params, cv=3)
@@ -129,11 +138,35 @@ class KernelDensityEstimator:
         self._kde = grid.best_estimator_
 
     @property
-    def factor(self) -> Factor:
+    def factors(self) -> list[Factor]:
         """
-        Get the effect factor.
+        Get the effect factors.
         """
-        return self._factor
+        return self._factors
+
+    @property
+    def variables(self) -> list[int]:
+        """
+        Get the variables of factors.
+        """
+        variables = []
+        for f in self.factors:
+            variables.extend(f.variables)
+        return variables
+
+    @property
+    def factor_indices(self) -> dict[Factor, int]:
+        """
+        Get the indices that each factor corresponds to.
+        """
+        indices = {}
+        it = 0
+        for f in self.factors:
+            n_vars = len(f.variables)
+            rng = list(range(it, n_vars))
+            indices[f] = rng
+            it += len(f)
+        return indices
 
     def sample(self, n_samples=100) -> np.ndarray:
         """
@@ -152,7 +185,7 @@ class KernelDensityEstimator:
         assert isinstance(self._kde, KernelDensity), "Estimator not trained yet"
         data = self._kde.sample(n_samples)
         if data.ndim == 1:  # ensure always shape of (N X D)
-            return np.reshape(data, (data.shape[0], 1))
+            data = np.reshape(data, (data.shape[0], 1))
         return data
 
     def integrate_out(self, variable_list: list[int], **kwargs) -> 'KernelDensityEstimator':
@@ -198,10 +231,11 @@ class Operator:
 
 class Proposition:
     """
-    A non-typed, non-lifted predicate (i.e. a proposition).
+    A predicate over one or more factors.
     """
 
-    def __init__(self, name: str, kde: KernelDensityEstimator | None):
+    def __init__(self, idx: int, name: str, kde: KernelDensityEstimator | None):
+        self._idx = idx
         self._name = name
         self._kde = kde
         self.sign = 1  # whether true or the negation of the predicate
@@ -215,16 +249,28 @@ class Proposition:
         return self._name
 
     @property
-    def factor(self):
-        assert isinstance(self._kde, KernelDensityEstimator)
-        return self._kde.factor
+    def idx(self) -> int:
+        return self._idx
 
-    def sample(self, n_samples):
+    @property
+    def factors(self) -> list[Factor]:
+        assert isinstance(self._kde, KernelDensityEstimator)
+        return self._kde.factors
+
+    @property
+    def variables(self) -> list[int]:
+        assert isinstance(self._kde, KernelDensityEstimator)
+        return self._kde.variables
+
+    def sample(self, n_samples) -> np.ndarray:
         assert isinstance(self._kde, KernelDensityEstimator)
         return self._kde.sample(n_samples)
 
     def is_grounded(self) -> bool:
         return False
+
+    def is_independent(self) -> bool:
+        return len(self.factors) == 1
 
     def negate(self) -> 'Proposition':
         """"
@@ -242,9 +288,16 @@ class Proposition:
             return 'not ({})'.format(self.name)
         return self.name
 
+    def __hash__(self):
+        return hash(self._idx)
+
     @staticmethod
     def not_failed():
-        return Proposition("notfailed", None)
+        return Proposition(-2, "notfailed", None)
+
+    @staticmethod
+    def empty():
+        return Proposition(-1, "empty", None)
 
 
 class UniquePredicateList:
