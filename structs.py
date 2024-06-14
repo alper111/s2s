@@ -36,25 +36,6 @@ class Factor:
     def variables(self) -> list[int]:
         return self._indices
 
-    def is_independent(self, other: 'Factor', dataset: 'S2SDataset') -> bool:
-        """
-        Check if this factor is independent of another factor in a dataset.
-
-        Parameters
-        ----------
-        other : Factor
-            The other factor.
-        dataset : S2SDataset
-            The dataset.
-
-        Returns
-        -------
-        bool
-            Whether the factors are independent.
-        """
-        # set to true for now
-        return True
-
     def __eq__(self, other) -> bool:
         return hash(self) == hash(other)
 
