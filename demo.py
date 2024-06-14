@@ -6,7 +6,14 @@ from partition import partition_to_subgoal
 from learn_ops import learn_operators
 from build_vocab import build_vocabulary, build_schemata
 
-if __name__ == "__main__":
+
+logging.basicConfig(level=logging.INFO,
+                    format='%(asctime)s [%(levelname)s]: %(message)s',
+                    datefmt="%H:%M:%S", force=True)
+logger = logging.getLogger("main")
+
+
+def main(n_samples: int, object_factored: bool):
     # initialize the environment
     env = ObjectCentricEnv(MNIST8Tile(random=False, max_steps=1))
 

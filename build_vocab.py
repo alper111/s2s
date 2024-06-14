@@ -1,4 +1,5 @@
-from itertools import combinations, product, chain
+from itertools import product, chain, combinations
+import logging
 
 import numpy as np
 
@@ -8,6 +9,8 @@ from structs import (KernelDensityEstimator, Operator, UniquePredicateList,
 __author__ = 'Steve James and George Konidaris'
 # Modified by Alper Ahmetoglu. Original source:
 # https://github.com/sd-james/skills-to-symbols/tree/master
+
+logger = logging.getLogger(__name__)
 
 
 def build_vocabulary(partitions: dict[tuple[int, int], S2SDataset], factors: list[Factor]) \
@@ -415,7 +418,7 @@ def _probability_in_precondition(propositions: list[Proposition], precondition: 
     if len(add_list) > 0:
         if not allow_fill_in:
             return 0
-        print("Must randomly fill in data from {} to intersect with precondition".format(add_list))
+        logger.info("Must randomly fill in data from {} to intersect with precondition".format(add_list))
         raise NotImplementedError
 
     total_mask = np.array(mask)[keep_indices]
@@ -523,7 +526,7 @@ def _factorise(operators: list[Operator], n_variables: int) -> list[list[int]]:
             options.append(modifies[i])
 
     for i, f_i in enumerate(factors):
-        print(f"Factor {i}: {len(f_i)} # modifying options: {len(options[i])}")
+        logger.info(f"Factor {i}: {len(f_i)} # modifying options: {len(options[i])}")
 
     return factors
 

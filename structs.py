@@ -1,3 +1,4 @@
+import logging
 from typing import Callable
 from collections import defaultdict
 import copy
@@ -10,6 +11,7 @@ from sklearn.neighbors import KernelDensity
 __author__ = 'Steve James and George Konidaris'
 # Modified by Alper Ahmetoglu. Original source:
 # https://github.com/sd-james/skills-to-symbols/tree/master
+logger = logging.getLogger(__name__)
 
 
 class Factor:
@@ -133,7 +135,7 @@ class KernelDensityEstimator:
         params = {'bandwidth': bandwidth_range}
         grid = GridSearchCV(KernelDensity(kernel='gaussian'), params, cv=3)
         grid.fit(data)
-        # print("Best bandwidth hyperparameter: {}".format(grid.best_params_['bandwidth']))
+        # logger.debug("Best bandwidth hyperparameter: {}".format(grid.best_params_['bandwidth']))
         self._kde = grid.best_estimator_
 
     @property

@@ -1,9 +1,12 @@
 from collections import defaultdict
+import logging
 
 import numpy as np
 from scipy.spatial.distance import cdist
 
 from structs import S2SDataset, sort_dataset
+
+logger = logging.getLogger(__name__)
 
 
 def partition_to_subgoal(dataset: S2SDataset) -> dict[tuple[int, int], S2SDataset]:
@@ -33,8 +36,8 @@ def partition_to_subgoal(dataset: S2SDataset) -> dict[tuple[int, int], S2SDatase
         abstract_effect = flat_dataset.next_state * flat_dataset.mask
 
         # partition by abstract effect
-        abs_eff_partitions = _partition(abstract_effect)
-        print(f"Option {o_i} has {len(abs_eff_partitions)} abstract effects.")
+        abs_eff_partitions, _ = _partition(abstract_effect)
+        logger.info(f"Option {o_i} has {len(abs_eff_partitions)} abstract effects.")
         it = 0
         for eff in abs_eff_partitions:
             idx_i = abs_eff_partitions[eff]

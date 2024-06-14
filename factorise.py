@@ -1,6 +1,9 @@
 from collections import defaultdict
+import logging
 
 from structs import S2SDataset, Factor
+
+logger = logging.getLogger(__name__)
 
 
 def factors_from_partitions(partitions: dict[tuple[int, int], S2SDataset], threshold: float = 0.9) \
