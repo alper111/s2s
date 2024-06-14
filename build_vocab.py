@@ -2,9 +2,11 @@ from itertools import product, chain, combinations
 import logging
 
 import numpy as np
+from scipy import stats
+from scipy.spatial.distance import cdist
 
-from structs import (KernelDensityEstimator, Operator, UniquePredicateList,
-                     Proposition, ActionSchema, SupportVectorClassifier)
+from structs import (KernelDensityEstimator, Operator, UniquePredicateList, Factor,
+                     Proposition, ActionSchema, SupportVectorClassifier, S2SDataset)
 
 __author__ = 'Steve James and George Konidaris'
 # Modified by Alper Ahmetoglu. Original source:
@@ -440,13 +442,13 @@ def _overlapping_dists(x: KernelDensityEstimator, y: KernelDensityEstimator) -> 
         x : KernelDensityEstimator
             The first distribution.
         y : KernelDensityEstimator
-        The second distribution.
+            The second distribution.
 
     Returns:
     --------
         bool: True if the distributions are similar, False otherwise.
     """
-    if set(x.mask) != set(y.mask):
+    if set(x.factors) != set(y.factors):
         return False
 
     dat1 = x.sample(100)
@@ -457,7 +459,7 @@ def _overlapping_dists(x: KernelDensityEstimator, y: KernelDensityEstimator) -> 
     if np.linalg.norm(mean1 - mean2) > 0.1:
         return False
 
-    ndims = len(x.mask)
+    ndims = len(x.variables)
     for n in range(ndims):
         if np.min(dat1[:, n]) > np.max(dat2[:, n]) or np.min(dat2[:, n]) > np.max(dat1[:, n]):
             return False
