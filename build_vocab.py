@@ -10,71 +10,178 @@ __author__ = 'Steve James and George Konidaris'
 # https://github.com/sd-james/skills-to-symbols/tree/master
 
 
-def build_vocabulary(operators: list[Operator], n_variables: int) \
-               -> tuple[UniquePredicateList,
-                        dict[tuple[int, int], list[Proposition] | list[list[Proposition]]]]:
+def build_vocabulary(partitions: dict[tuple[int, int], S2SDataset], factors: list[Factor]) \
+        -> tuple[UniquePredicateList,
+                 dict[tuple[int, int], list[Proposition]],
+                 dict[tuple[int, int], list[Proposition]]]:
     vocabulary = UniquePredicateList(_overlapping_dists)
-    factors = _factorise(operators, n_variables)
-    print(f"Number of factors={len(factors)}")
+    pre_props = {}
+    eff_props = {}
 
-    propositions = {}
-    for i, operator in enumerate(operators):
-        print(f"Processing operator {i}")
-        predicates = []
-        if isinstance(operator.effect, KernelDensityEstimator):
-            vocabulary, preds = _compute_possible_projections(vocabulary, operator.effect, factors)
-            predicates.extend(preds)
-        else:
-            for op_obj_eff in operator.effect:
-                vocabulary, preds = _compute_possible_projections(vocabulary, op_obj_eff, factors)
-                predicates.append(preds)
-        propositions[(operator.option, operator.partition)] = predicates
+    for key in partitions:
+        partition_k = partitions[key]
+        vocabulary, preds = create_effect_clause(vocabulary, partition_k)
+        n_pred = len(preds) if not partition_k.is_object_factored else sum([len(x) for x in preds])
+        logger.info(f"Processed Eff({key[0]}-{key[1]}); {n_pred} predicates found.")
+        eff_props[key] = preds
+
     vocabulary.fill_mutex_groups(factors)
-    return vocabulary, propositions
+    for f_i, factor in enumerate(vocabulary.mutex_groups):
+        group = vocabulary.mutex_groups[factor]
+        # no effect changes this factor, but there might be preconditions that depend on this factor.
+        # so, learn a density estimator for each precondition just to be safe.
+        # there should be only one such factor.
+        if len(group) == 0:
+            logger.info(f"Factor {f_i} is constant. Learning a density estimator in case a precond depends on it.")
+            for key in partitions:
+                logger.debug(f"Learning a density estimator for Pre({key[0]}-{key[1]}) on factor {f_i}...")
+                partition_k = partitions[key]
+                if partition_k.is_object_factored:
+                    for j in range(partition_k.n_objects):
+                        vocabulary.append(partition_k.state[:, j], [factor])
+                        # density = _create_factored_densities(partition_k.state[:, j], vocabulary, [factor])
+                        # vocabulary.append(density[0], group)
+                else:
+                    vocabulary.append(partition_k.state, [factor])
+                    # density = _create_factored_densities(partition_k.state, vocabulary, [factor])
+                    # vocabulary.append(density[0], group)
+            for i, pred in enumerate(vocabulary):
+                if pred.factors[0] == factor:
+                    group.append(i)
+
+    # now learn preconditions in terms of the vocabulary found in the previous step
+    for key in partitions:
+        x_pos = partitions[key].state
+        n = len(x_pos)
+        x_neg = []
+        other_options = [o for o in partitions if o != key]
+        for _ in range(n):
+            j = np.random.randint(len(other_options))
+            o_ = other_options[j]
+            ds_neg = partitions[o_]
+            sample_neg = ds_neg.state[np.random.randint(len(ds_neg.state))]
+            x_neg.append(sample_neg)
+        x_neg = np.array(x_neg)
+        x = np.concatenate([x_pos, x_neg])
+        y = np.concatenate([np.ones(n), np.zeros(n)])
+        pre = _compute_preconditions(x, y, vocabulary)
+        pre_props[key] = pre
+        n_pred = len(pre) if not partitions[key].is_object_factored else sum([len(x) for x in pre])
+        logger.info(f"Processed Pre({key[0]}-{key[1]}); {n_pred} predicates found.")
+    return vocabulary, pre_props, eff_props
 
 
-def build_schemata(operators: list[Operator], vocabulary: UniquePredicateList,
-                   op_propositions: dict[tuple[int, int], list[Proposition] | list[list[Proposition]]]) -> \
-                    list[ActionSchema]:
+def build_schemata(vocabulary: UniquePredicateList,
+                   pre_props: dict[tuple[int, int], list[Proposition] | list[list[Proposition]]],
+                   eff_props: dict[tuple[int, int], list[Proposition] | list[list[Proposition]]]) \
+                    -> list[ActionSchema]:
     schemata = []
-    for operator in operators:
-        action_schema = ActionSchema(operator)
-
-        total_prob = 1.0
-        if isinstance(operator.precondition, list):
-            for i, obj_pre in enumerate(operator.precondition):
-                name = f"x{i}"
-                # TODO: consider something else if objects in the precondition
-                # do not match the objects in the effect.
-                # (don't know if such a case can happen)
-                eff_o = op_propositions[(operator.option, operator.partition)][i]
-                effect = operator.effect[i]
-                action_schema, prob = _fill_action_schema(action_schema, obj_pre, effect, eff_o, vocabulary, name)
-                total_prob *= prob
+    for key in pre_props:
+        pre = pre_props[key]
+        eff = eff_props[key]
+        if len(eff) == 0:
+            continue
+        object_factored = True if isinstance(eff[0], list) else False
+        action_schema = ActionSchema(f"p{key[0]}_{key[1]}")
+        if object_factored:
+            for j in range(len(pre)):
+                if len(eff) == 0:
+                    eff_j = []
+                else:
+                    eff_j = eff[j]
+                action_schema = create_action_schema(action_schema, vocabulary, pre[j], eff_j, f"obj{j}")
         else:
-            eff_o = op_propositions[(operator.option, operator.partition)]
-            effect = operator.effect
-            action_schema, prob = _fill_action_schema(action_schema, operator.precondition, effect, eff_o, vocabulary)
-            total_prob *= prob
-
-        print(f"Best found with p={total_prob:.3f} for {operator.option}-{operator.partition}")
+            action_schema = create_action_schema(action_schema, vocabulary, pre, eff)
         schemata.append(action_schema)
-
     return schemata
 
 
-def _compute_possible_projections(vocabulary: UniquePredicateList, effect: KernelDensityEstimator,
-                                  factors: list[list[int]]) -> list[KernelDensityEstimator]:
-    projections = []
-    op_factors = _extract_factors(effect.mask, factors)
-    # single factor -- the graph case
-    if len(op_factors) == 1:
-        predicate = vocabulary.append(effect)
-        projections.append(predicate)
-    # the below combination is only valid if factors are independent.
-    # if factors are not independent, we need to consider all possible combinations.
-    # i.e., for comb_size in range(1, len(op_factors)-1):
-    #           for subset in combinations(op_factors, comb_size):
+def create_action_schema(action_schema: ActionSchema, vocabulary: UniquePredicateList, pre_prop: list[Proposition],
+                         eff_prop: list[Proposition], obj_name: str = "") -> ActionSchema:
+    # propositional case (i.e., no objects)
+    if obj_name == "":
+        action_schema.add_preconditions(pre_prop)
+    # object-centric version
+    else:
+        action_schema.add_obj_preconditions(obj_name, pre_prop)
+
+    # TODO: add probabilities...
+    f_pre = set()
+    f_eff = set()
+    for prop in pre_prop:
+        f_pre = f_pre.union(set(prop.factors))
+    for prop in eff_prop:
+        f_eff = f_eff.union(set(prop.factors))
+
+    eff_neg = [x.negate() for x in pre_prop if set(x.factors).issubset(f_eff)]
+    # P_nr = [x for x in vocabulary if x not in eff_prop]
+    eff_proj_neg = [x for x in pre_prop if (not set(x.factors).issubset(f_eff)) and
+                                           (not set(x.factors).isdisjoint(f_eff))]
+    eff_proj_pos = [vocabulary.project(x, list(f_eff)) for x in eff_proj_neg]
+    eff_proj_neg = [x.negate() for x in eff_proj_neg]
+    # there should be projected eff propositions for dependents etc.
+
+    # eff_neg = [x for x in vocabulary if {x.factor}.issubset(f_eff)]
+    # eff_neg = [x for x in eff_neg if x not in eff_prop]
+    # eff_neg = [x for x in eff_neg if not ({x.factor}.issubset(f_pre) and (x not in pre_prop))]
+    # eff_neg = [x.negate() for x in eff_neg]
+
+    if obj_name == "":
+        action_schema.add_effect(eff_prop + eff_proj_pos + eff_neg + eff_proj_neg, 1)
+    else:
+        action_schema.add_obj_effect(obj_name, eff_prop + eff_proj_pos + eff_neg + eff_proj_neg, 1)
+    return action_schema
+
+
+def create_effect_clause(vocabulary: UniquePredicateList, partition: S2SDataset) \
+        -> list[KernelDensityEstimator] | list[list[KernelDensityEstimator]]:
+    effect_clause = []
+    if partition.factors is None:
+        # partition does not contain any state changes. return empty list.
+        return vocabulary, []
+
+    if partition.is_object_factored:
+        for i, obj_factors in enumerate(partition.factors):
+            if len(obj_factors) == 0:
+                effect_clause.append([])
+                continue
+            densities = _create_factored_densities(partition.next_state[:, i], vocabulary, obj_factors)
+            effect_clause.append(densities)
+    else:
+        if len(partition.factors) != 0:
+            densities = _create_factored_densities(partition.next_state, vocabulary, partition.factors)
+            effect_clause.extend(densities)
+    return vocabulary, effect_clause
+
+
+def _compute_preconditions(x: np.ndarray, y: np.ndarray, vocabulary: UniquePredicateList) \
+        -> list[Proposition] | list[list[Proposition]]:
+    symbol_indices = vocabulary.get_active_symbol_indices(x)
+    if symbol_indices.ndim == 3:
+        object_factored = True
+    else:
+        object_factored = False
+
+    n = symbol_indices.shape[0]
+    pos_symbols = symbol_indices[:n//2]
+
+    # get the most frequent symbol for each factor
+    mode, _ = stats.mode(pos_symbols, axis=0, keepdims=False)
+    if object_factored:
+        preds = [[] for _ in range(symbol_indices.shape[1])]
+    else:
+        preds = []
+
+    if object_factored:
+        for j in range(symbol_indices.shape[1]):
+            for f_i in range(symbol_indices.shape[2]):
+                sym = int(mode[j, f_i])
+                mask = symbol_indices[:, j, f_i] == sym
+                if np.mean(y[mask] == 1) > 0.7:
+                    factor = vocabulary.factors[f_i]
+                    group = vocabulary.mutex_groups[factor]
+                    prop = vocabulary[group[sym]]
+                    preds[j].append(prop)
     else:
         for f_i in range(symbol_indices.shape[1]):
             sym = int(mode[f_i])
