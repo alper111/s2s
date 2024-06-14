@@ -119,13 +119,13 @@ def _partition(x: np.ndarray) -> dict[int, list]:
         A dictionary of partitioned indices.
     """
     # TODO: make this portion deep?
-    _, labels, _ = _x_means(x, 1, 200)
+    centroids, labels, _ = _x_means(x, 1, 50)
     partitions = {}
     for i in range(max(labels) + 1):
         indices = np.where(labels == i)[0].tolist()
         if len(indices) > 0:
             partitions[i] = indices
-    return partitions
+    return partitions, centroids
 
 
 def _k_means(x: np.ndarray, k: int, centroids: np.ndarray | None = None) -> tuple[np.ndarray, np.ndarray, float]:
