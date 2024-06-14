@@ -28,11 +28,10 @@ def partition_to_subgoal(dataset: S2SDataset) -> dict[tuple[int, int], S2SDatase
     # split by options
     option_partitions = _split_by_options(dataset)
 
-    opt_idx = 0
     # partition each option by mask and abstract effect
     for o_i, partition_k in option_partitions.items():
         # compute masked effect
-        flat_dataset = sort_dataset(partition_k, mask_full_obj=False, flatten=True)
+        flat_dataset = sort_dataset(partition_k, mask_pos_feats=True, flatten=True)
         abstract_effect = flat_dataset.next_state * flat_dataset.mask
 
         # partition by abstract effect
@@ -48,9 +47,8 @@ def partition_to_subgoal(dataset: S2SDataset) -> dict[tuple[int, int], S2SDatase
                 partition_k.next_state[idx_i],
                 partition_k.mask[idx_i]
             )
-            partitions[(opt_idx, it)] = sort_dataset(partition, mask_full_obj=False)
+            partitions[(o_i, it)] = sort_dataset(partition, shuffle_only_nonmask=True)
             it += 1
-        opt_idx += 1
 
     # TODO: merge partitions with intersecting initiation sets
     # partitions = _merge_partitions(partitions)
