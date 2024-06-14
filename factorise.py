@@ -28,7 +28,6 @@ def factors_from_partitions(partitions: dict[tuple[int, int], S2SDataset], thres
     factors = []
     options = []
     n_variables = partitions[partition_keys[0]].mask.shape[-1]
-    empty_factor_idx = None
 
     for i in range(n_variables):
         found = False
@@ -41,24 +40,53 @@ def factors_from_partitions(partitions: dict[tuple[int, int], S2SDataset], thres
         if not found:
             factors.append([i])
             options.append(modifies[i])
-            if len(modifies[i]) == 0:
-                empty_factor_idx = len(factors) - 1
 
     factors = [Factor(f) for f in factors]
 
-    # mutates partitions!
-    for f_i, modif_opts in zip(factors, options):
-        for o_i in modif_opts:
-            if partitions[o_i].factors is None:
-                partitions[o_i].factors = []
-            partitions[o_i].factors.append(f_i)
-    # fill partitions that are not modified with the empty factor
-    if empty_factor_idx is not None:
-        for p_i in partition_keys:
-            if partitions[p_i].factors is None:
-                partitions[p_i].factors = [factors[empty_factor_idx]]
-
     return factors
+
+
+def add_factors_to_partitions(partitions: dict[tuple[int, int], S2SDataset], factors: list[Factor],
+                              threshold: float = 0.9):
+    """
+    Add factors to the partitions. Mutates the partitions in place.
+
+    Parameters
+    ----------
+    partitions : dict[tuple[int, int], S2SDataset]
+        Subgoal partitions.
+    factors : list[Factor]
+        Factors that represent the state space.
+    threshold : float
+        Minimum proportion of samples that must be modified
+        for a factor to be considered as modified by the partition.
+
+    Returns
+    -------
+    None
+    """
+    partition_keys = list(partitions.keys())
+    for p_i in partition_keys:
+        partition = partitions[p_i]
+
+        if partition.is_object_factored:
+            partition.factors = [[] for _ in range(partition.n_objects)]
+        else:
+            partition.factors = []
+
+        for factor in factors:
+            factor_mask = partition.mask[..., factor.variables].mean(axis=0)
+            # By construction, if any of the variables is higher than the threshold,
+            # then all of them should be higher. But if factors are provided from
+            # some other procedure, then this might not be the case. Therefore,
+            # check if any of the variables are modified enough.
+            if partition.is_object_factored:
+                for obj_i in range(partition.n_objects):
+                    if (factor_mask[obj_i] > threshold).any():
+                        partition.factors[obj_i].append(factor)
+            else:
+                if (factor_mask > threshold).any():
+                    partition.factors.append(factor)
 
 
 def _modifies(partitions: dict[tuple[int, int], S2SDataset], threshold: float = 0.9) \
