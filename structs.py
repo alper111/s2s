@@ -384,17 +384,23 @@ class ActionSchema:
             effect += _proposition_to_str(effects[1], None)
         parameters = []
         for name in self.obj_preconditions:
+            if len(self.obj_preconditions[name]) == 0:
+                continue
             parameters.append(name)
             if len(precondition) > 0:
                 precondition += " "
             precondition += _proposition_to_str(self.obj_preconditions[name], name)
 
         for name in self.obj_effects:
+            max_effect = max(self.obj_effects[name], key=lambda x: x[0])
+            if len(max_effect[1]) == 0:
+                continue
+
             if name not in parameters:
                 parameters.append(name)
             if len(effect) > 0:
                 effect += " "
-            max_effect = max(self.obj_effects[name], key=lambda x: x[0])
+
             effect += _proposition_to_str(max_effect[1], name)
         parameters = " ".join([f"?{name}" for name in parameters])
 
@@ -413,7 +419,9 @@ def _proposition_to_str(proposition: Proposition | list[Proposition], name: str 
         if proposition.sign < 0:
             return f"(not ({prop}))"
     elif isinstance(proposition, list):
-        assert len(proposition) > 0
+        if len(proposition) == 0:
+            return ""
+
         props = []
         for prop in proposition:
             p = prop.name
