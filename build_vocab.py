@@ -76,13 +76,115 @@ def _compute_possible_projections(vocabulary: UniquePredicateList, effect: Kerne
     # i.e., for comb_size in range(1, len(op_factors)-1):
     #           for subset in combinations(op_factors, comb_size):
     else:
-        comb_size = len(op_factors) - 1
-        for subset in combinations(op_factors, comb_size):
-            variable_subset = np.concatenate(subset).tolist()
-            marginal = effect.integrate_out(variable_subset)
-            predicate = vocabulary.append(marginal)
-            projections.append(predicate)
-    return vocabulary, projections
+        for f_i in range(symbol_indices.shape[1]):
+            sym = int(mode[f_i])
+            mask = symbol_indices[:, f_i] == sym
+            if np.mean(y[mask] == 1) > 0.7:
+                factor = vocabulary.factors[f_i]
+                group = vocabulary.mutex_groups[factor]
+                prop = vocabulary[group[sym]]
+                preds.append(prop)
+    return preds
+
+
+def _create_factored_densities(data, vocabulary, factors):
+    # use validation samples for independency tests
+    n_val = max(int(len(data) * 0.1), 3)
+    densities = []
+    dependency_groups = _compute_factor_dependencies(data[-n_val:], factors)
+    _n_expected_symbol = sum([2**len(x)-1 for x in dependency_groups])
+    logger.info(f"n_factors={len(factors)}, n_groups={len(dependency_groups)}, n_expected_symbol={_n_expected_symbol}")
+    for group in dependency_groups:
+        predicate = vocabulary.append(data, group)
+        densities.append(predicate)
+    return densities
+
+
+def _compute_factor_dependencies(data, factors, method="independent"):
+    if len(factors) == 1:
+        return [factors]
+
+    if method == "gaussian":
+        return _gaussian_independent_factor_groups(data, factors)
+    elif method == "knn":
+        return _knn_independent_factor_groups(data, factors)
+    elif method == "independent":
+        return [[f] for f in factors]
+
+
+def _gaussian_independent_factor_groups(data, factors):
+    n_factors = len(factors)
+    independent_factor_groups = []
+    factor_vars = []
+    factor_indices = []
+    it = 0
+    for f in factors:
+        factor_vars.extend(f.variables)
+        n_vars = len(f.variables)
+        factor_indices.append(np.arange(it, it+n_vars))
+        it += n_vars
+    assert len(factor_vars) > 0
+
+    cov = np.cov(data[:, factor_vars], rowvar=False) + 1e-6
+
+    std = cov.diagonal()**0.5
+    abs_corr = abs(cov / (std.reshape(-1, 1) @ std.reshape(1, -1)))
+    ind_map = abs_corr > 0.7
+    ind_factors = np.zeros((n_factors, n_factors), dtype=bool)
+    for i in range(n_factors):
+        i_vars = factor_indices[i]
+        i_changing = std[i_vars] > 0.1
+        if not np.any(i_changing):
+            ind_factors[i, i] = True
+            continue
+
+        for j in range(i, n_factors):
+            j_vars = factor_indices[j]
+            j_changing = std[j_vars] > 0.1
+            if not np.any(j_changing):
+                continue
+
+            ij_dep = np.any(ind_map[i_vars[i_changing]][:, j_vars[j_changing]])
+            ind_factors[i, j] = ij_dep
+            ind_factors[j, i] = ij_dep
+
+    remaining_factors = list(range(n_factors))
+    while len(remaining_factors) > 0:
+        ind_partial = ind_factors[remaining_factors][:, remaining_factors]
+        group_idx, = np.where(ind_partial[0])
+        group = [remaining_factors[g_i] for g_i in group_idx]
+        independent_factor_groups.append([factors[g_i] for g_i in group])
+        remaining_factors = [f for f in remaining_factors if f not in group]
+    return independent_factor_groups
+
+
+def _knn_independent_factor_groups(data, factors):
+    n_factors = len(factors)
+    independent_factor_groups = []
+    remaining_factors = [f for f in factors]
+    max_comb_size = n_factors // 2
+    for comb_size in range(1, max_comb_size+1):
+        if len(remaining_factors) <= comb_size:
+            break
+
+        comb_queue = list(combinations(remaining_factors, comb_size))
+        while len(comb_queue) > 0:
+            comb = comb_queue.pop(0)
+            remaining_factors = [f for f in remaining_factors if f not in comb]
+            f_vars = list(chain.from_iterable([f.variables for f in comb]))
+            other_vars = list(chain.from_iterable([f.variables for f in remaining_factors]))
+            data_comb = data[:, f_vars]
+            data_other = data[:, other_vars]
+            data_real = np.concatenate([data_comb, data_other], axis=1)
+            data_fake = np.concatenate([data_comb, np.random.permutation(data_other)], axis=1)
+            x_acc, y_acc = _knn_accuracy(data_real, data_fake)
+            if abs(x_acc-y_acc) < 0.075:
+                independent_factor_groups.append(comb)
+                remaining_factors = [f for f in remaining_factors if f not in comb]
+                comb_queue = [c for c in comb_queue if not set(c).intersection(set(comb))]
+    if len(independent_factor_groups) == 0:
+        independent_factor_groups.append(factors)
+    return independent_factor_groups
 
 
 def _find_precond_propositions(vocabulary: UniquePredicateList,
@@ -373,3 +475,16 @@ def _mask_to_factors(mask: list[int], factors: list[list[int]]) -> list[int]:
         if not set(mask).isdisjoint(set(factor)):
             f.append(i)
     return f
+
+
+def _knn_accuracy(x, y, k=5):
+    n_sample = x.shape[0]
+    x = x.reshape(n_sample, -1)
+    y = y.reshape(n_sample, -1)
+    xy = np.concatenate([x, y], axis=0)
+    dists = cdist(xy, xy) + np.eye(2*n_sample) * 1e12
+    indexes = np.argsort(dists, axis=1)[:, :k]
+    x_decisions = np.sum(indexes < n_sample, axis=1) / k
+    x_acc = np.sum(x_decisions[:n_sample]) / n_sample
+    y_acc = 1 - np.sum(x_decisions[n_sample:]) / n_sample
+    return x_acc, y_acc
