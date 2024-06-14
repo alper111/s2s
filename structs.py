@@ -187,33 +187,29 @@ class KernelDensityEstimator:
             data = np.reshape(data, (data.shape[0], 1))
         return data
 
-    def integrate_out(self, variable_list: list[int], **kwargs) -> 'KernelDensityEstimator':
+    def integrate_out(self, factor_list: list[Factor], **kwargs) -> 'KernelDensityEstimator':
         """
-        Integrate out the given variables from the distribution.
+        Integrate out the given factors from the distribution.
 
         Parameters
         ----------
-        variable_list : list[int]
-            A list of variables to be marginalized out from the distribution.
+        factor_list : list[Factor]
+            A list of factors to be marginalized out from the distribution.
 
         Returns
         -------
         KernelDensityEstimator
-            A new distribution equal to the original distribution with the specified variables marginalized out.
+            A new distribution equal to the original distribution with the specified factors marginalized out.
         """
-        variable_list = sorted(variable_list)  # make sure it's always sorted to prevent bugs!
-
-        new_vars = []
-        new_indices = []
-
-        # find all the other variables in the mask except what's given
-        for pos, val in enumerate(self.mask):  # TODO probably a better way of doing this in numpy
-            if val not in variable_list:
-                new_vars.append(val)
-                new_indices.append(pos)
+        rem_factors = []
+        rem_factor_indices = []
+        for f in self.factors:
+            if f not in factor_list:
+                rem_factors.append(f)
+                rem_factor_indices.extend(self.factor_indices[f])
         n_samples = kwargs.get('estimator_samples', 100)
-        new_samples = self.sample(n_samples)[:, new_indices]
-        kde = KernelDensityEstimator(mask=new_vars)
+        new_samples = self.sample(n_samples)[:, rem_factor_indices]
+        kde = KernelDensityEstimator(factors=rem_factors)
         kwargs['masked'] = True  # the data has already been masked
         kde.fit(new_samples, **kwargs)
         return kde
