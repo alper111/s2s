@@ -265,59 +265,144 @@ class UniquePredicateList:
         """
         self._comparator = comparator if comparator is not None else lambda x, y: x is y
         self._list = []
+        self._projections: list[dict[int, int | None]] = []
         self.mutex_groups = None
         self.factors = None
         self.__idx = 0
 
-    def append(self, item: KernelDensityEstimator) -> Proposition:
+    def append(self, data: np.ndarray, factors: list[Factor]):
         """
-        Add an item to the list
+        Adds a predicate to the predicate list. If the predicate covers multiple factors,
+        all possible combinations of projections are added to the vocabulary as well.
 
         Parameters
         ----------
-        item : KernelDensityEstimator
-            The item to add.
+        data : np.ndarray
+            The data on which predicates are fit.
+        factors : list[Factor]
+            Factors to be modeled.
 
         Returns
         -------
-        predicate : Proposition
-            The predicate in the list. If the item is a duplicate, the predicate will refer to the
-            existing item in the list.
+        base_predicate : Proposition
+            The newly created predicate for the given set of factors.
         """
-        for x in self._list:
-            if self._comparator(item, x.estimator):
-                return x
-        idx = len(self._list)
-        predicate = Proposition('symbol_{}'.format(idx), item)
-        self._list.append(predicate)
-        return predicate
+        item = KernelDensityEstimator(factors)
+        item.fit(data)
+
+        # add all possible projections here.
+        # (new_estimator, projected_factor, parent_idx)
+        add_queue = [(item, None, None)]
+        base_predicate = None
+        size_before = len(self)
+        while len(add_queue) > 0:
+            estimator, p_factor, parent_idx = add_queue.pop(0)
+            # TODO: KD-Tree-like hash function on the estimator?
+            idx = self._get_or_none(estimator)
+            if idx != -1:
+                predicate = self._list[idx]
+            else:
+                # create a new predicate for this estimator and add it to the vocabulary
+                idx = len(self._list)
+                predicate = Proposition(idx, f'symbol_{idx}', estimator)
+                self._list.append(predicate)
+                self._projections.append({})
+                # if there are remaining factors to be projected, add them to the queue
+                if not predicate.is_independent():
+                    for f in predicate.factors:
+                        rem_factors = [fac for fac in predicate.factors if fac != f]
+                        child_item = KernelDensityEstimator(rem_factors)
+                        child_item.fit(data)
+                        add_queue.append((child_item, f, idx))
+
+            # if this estimator is from a previous projection, set it.
+            if p_factor is not None:
+                self._projections[parent_idx][p_factor] = idx
+
+            if base_predicate is None:
+                base_predicate = predicate
+        size_after = len(self)
+        logger.debug(f"Vocabulary size={len(self)}; {size_after-size_before} new predicates.")
+
+        return base_predicate
+
+    def add_projection(self, symbol: Proposition, factor: Factor, projection: Proposition):
+        self._projections[symbol.idx][factor] = projection.idx
+
+    def project(self, symbol: Proposition, factors: list[Factor]) -> Proposition:
+        if len(factors) == 0:
+            return symbol
+        elif len(symbol.factors) == 1 and len(factors) == 1:
+            if factors[0] in symbol.factors:
+                return Proposition.empty()
+            else:
+                return symbol
+        else:
+            if factors[0] in symbol.factors:
+                proj_f0_idx = self._projections[symbol.idx][factors[0]]
+                proj_f0 = self[proj_f0_idx]
+                return self.project(proj_f0, factors[1:])
+            else:
+                return self.project(symbol, factors[1:])
 
     def get_active_symbol_indices(self, observation: np.ndarray) -> np.ndarray:
         assert self.mutex_groups is not None, "Mutually exclusive factors are not defined."
-        assert observation.ndim == 2, "Observation should be 2D: (n_batch, n_features)"
+        n_factors = len(self.mutex_groups)
 
-        n_sample = observation.shape[0]
-        indices = np.zeros((n_sample, len(self.mutex_groups)), dtype=int)
+        if observation.ndim == 3:
+            n_sample, n_obj, _ = observation.shape
+            object_factored = True
+        elif observation.ndim == 2:
+            n_sample, _ = observation.shape
+            object_factored = False
+        else:
+            raise ValueError("Invalid observation shape.")
+
+        if object_factored:
+            indices = np.zeros((n_sample, n_obj, n_factors), dtype=int)
+        else:
+            indices = np.zeros((n_sample, n_factors), dtype=int)
+
         for f_i, factor in enumerate(self.mutex_groups):
             group = self.mutex_groups[factor]
-            if len(group) == 0:
+            n_sym = len(group)
+            if n_sym == 0:
                 raise ValueError("This shouldn't happen?!")
 
-            scores = np.zeros((n_sample, len(group)))
-            masked_obs = observation[:, factor.variables]
+            masked_obs = observation[..., factor.variables]
+            if object_factored:
+                scores = np.zeros((n_sample, n_obj, n_sym))
+                masked_obs = masked_obs.reshape(n_sample * n_obj, -1)
+            else:
+                scores = np.zeros((n_sample, n_sym))
+
             for p_i, idx in enumerate(group):
                 prop = self._list[idx]
-                scores[:, p_i] = prop.estimator._kde.score_samples(masked_obs)
-            indices[:, f_i] = np.argmax(scores, axis=1)
+                s = prop.estimator._kde.score_samples(masked_obs)
+                if object_factored:
+                    s = s.reshape(n_sample, n_obj)
+                scores[..., p_i] = s
+
+            indices[..., f_i] = np.argmax(scores, axis=-1)
         return indices
 
     def fill_mutex_groups(self, factors: list[Factor]) -> None:
         self.mutex_groups = defaultdict(list)
         self.factors = factors
         for factor in factors:
-            for i, pred in enumerate(self._list):
-                if pred.estimator.factor == factor:
+            for i, prop in enumerate(self._list):
+                # only consider propositions with a single factor for now
+                if (len(prop.factors) == 1) and (prop.factors[0] == factor):
                     self.mutex_groups[factor].append(i)
+            # add empty list if there are no predicates for this factor
+            if len(self.mutex_groups[factor]) == 0:
+                self.mutex_groups[factor] = []
+
+    def _get_or_none(self, item) -> int:
+        for i, x in enumerate(self._list):
+            if self._comparator(item, x.estimator):
+                return i
+        return -1
 
     def __getitem__(self, item: int | slice | list | tuple) -> Proposition | list[Proposition]:
         if isinstance(item, int):
@@ -357,7 +442,7 @@ class ActionSchema:
 
     def add_obj_preconditions(self, obj_idx: str, predicates: list[Proposition]):
         if obj_idx not in self.obj_preconditions:
-            self.obj_preconditions[obj_idx] = [Proposition.not_failed()]
+            self.obj_preconditions[obj_idx] = []
         self.obj_preconditions[obj_idx].extend(predicates)
 
     def add_effect(self, effect: list[Proposition], probability: float = 1):
