@@ -463,15 +463,19 @@ class PDDLDomain:
             for p_i, idx in enumerate(group):
                 prop = self.vocabulary[idx]
                 scores[p_i] = prop.estimator._kde.score_samples(masked_obs)[0]
-            active_symbols.append(group[np.argmax(scores)])
+            active_symbols.append(self.vocabulary[group[np.argmax(scores)]])
         return active_symbols
 
     def __str__(self):
-        symbols = f"\t\t({Proposition.not_failed()} ?x) "
+        symbols = "\t\t "
         for i, p in enumerate(self.vocabulary):
             # TODO: need to understand lifted propositions
             # fixed to lifted propositions for now
-            symbols += f"({p} ?x)"
+            if self.lifted:
+                symbols += f"({p} ?x)"
+            else:
+                symbols += f"({p})"
+
             if (i+1) % 6 == 0:
                 symbols += "\n\t\t"
             else:
