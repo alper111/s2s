@@ -4,7 +4,6 @@ import copy
 
 import numpy as np
 from sklearn.model_selection import GridSearchCV
-from sklearn.svm import SVC
 from sklearn.neighbors import KernelDensity
 
 
