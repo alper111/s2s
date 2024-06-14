@@ -8,6 +8,23 @@ from environment import ObjectCentricEnv
 
 
 def collect(n: int, env: gym.Env | ObjectCentricEnv, options: dict[str, Callable] | None = None) -> S2SDataset:
+    """
+    Collects n samples from the environment.
+
+    Parameters
+    ----------
+    n: int
+        Number of samples to collect.
+    env: gym.Env | ObjectCentricEnv
+        Environment to collect samples from.
+    options: dict[str, Callable] | None
+        Options to execute in the environment.
+
+    Returns
+    -------
+    S2SDataset
+        Dataset of <state, action, reward, next_state, mask> tuples.
+    """
     if isinstance(env.observation_space, gym.spaces.Box):
         obs_shape = (n,) + env.observation_space.shape
         act_shape = (n,)

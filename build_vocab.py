@@ -19,6 +19,25 @@ def build_vocabulary(partitions: dict[tuple[int, int], S2SDataset], factors: lis
         -> tuple[UniquePredicateList,
                  dict[tuple[int, int], list[Proposition]],
                  dict[tuple[int, int], list[Proposition]]]:
+    """
+    Build the vocabulary of propositions from the given partitions.
+
+    Parameters
+    ----------
+        partitions : dict[tuple[int, int], S2SDataset]
+            The partitions of the dataset.
+        factors : list[Factor]
+            The factors learned from the partitions.
+
+    Returns
+    -------
+        vocabulary : UniquePredicateList
+            The vocabulary of propositions.
+        pre_props : dict[tuple[int, int], list[Proposition]]
+            The preconditions for each partition.
+        eff_props : dict[tuple[int, int], list[Proposition]]
+            The effects for each partition.
+    """
     vocabulary = UniquePredicateList(_overlapping_dists)
     pre_props = {}
     eff_props = {}
@@ -80,6 +99,23 @@ def build_schemata(vocabulary: UniquePredicateList,
                    pre_props: dict[tuple[int, int], list[Proposition] | list[list[Proposition]]],
                    eff_props: dict[tuple[int, int], list[Proposition] | list[list[Proposition]]]) \
                     -> list[ActionSchema]:
+    """
+    Build the action schemata from the given preconditions and effects.
+
+    Parameters
+    ----------
+        vocabulary : UniquePredicateList
+            The vocabulary of propositions.
+        pre_props : dict[tuple[int, int], list[Proposition] | list[list[Proposition]]]
+            The preconditions for each partition.
+        eff_props : dict[tuple[int, int], list[Proposition] | list[list[Proposition]]]
+            The effects for each partition.
+
+    Returns
+    -------
+        schemata : list[ActionSchema]
+            The action schemata.
+    """
     schemata = []
     for key in pre_props:
         pre = pre_props[key]
@@ -103,6 +139,27 @@ def build_schemata(vocabulary: UniquePredicateList,
 
 def create_action_schema(action_schema: ActionSchema, vocabulary: UniquePredicateList, pre_prop: list[Proposition],
                          eff_prop: list[Proposition], obj_name: str = "") -> ActionSchema:
+    """
+    Create an action schema from the given preconditions and effects.
+
+    Parameters
+    ----------
+        action_schema : ActionSchema
+            The action schema to add the preconditions and effects to.
+        vocabulary : UniquePredicateList
+            The vocabulary of propositions.
+        pre_prop : list[Proposition]
+            The preconditions.
+        eff_prop : list[Proposition]
+            The effects.
+        obj_name : str
+            The name of the object.
+
+    Returns
+    -------
+        action_schema : ActionSchema
+            The action schema with the preconditions and effects added.
+    """
     # propositional case (i.e., no objects)
     if obj_name == "":
         action_schema.add_preconditions(pre_prop)
@@ -133,6 +190,23 @@ def create_action_schema(action_schema: ActionSchema, vocabulary: UniquePredicat
 
 def create_effect_clause(vocabulary: UniquePredicateList, partition: S2SDataset) \
         -> list[KernelDensityEstimator] | list[list[KernelDensityEstimator]]:
+    """
+    Create the effect clause for the given partition.
+
+    Parameters
+    ----------
+        vocabulary : UniquePredicateList
+            The vocabulary of propositions.
+        partition : S2SDataset
+            The partition to create the effect clause for.
+
+    Returns
+    -------
+        vocabulary : UniquePredicateList
+            The updated vocabulary of propositions.
+        effect_clause : list[KernelDensityEstimator] | list[list[KernelDensityEstimator]]
+            The effect clause, which is a list of densities.
+    """
     effect_clause = []
     if partition.factors is None:
         # partition does not contain any state changes. return empty list.
@@ -154,6 +228,23 @@ def create_effect_clause(vocabulary: UniquePredicateList, partition: S2SDataset)
 
 def _compute_preconditions(x: np.ndarray, y: np.ndarray, vocabulary: UniquePredicateList) \
         -> list[Proposition] | list[list[Proposition]]:
+    """
+    Compute the preconditions from the given data.
+
+    Parameters
+    ----------
+        x : np.ndarray
+            The data.
+        y : np.ndarray
+            The labels.
+        vocabulary : UniquePredicateList
+            The vocabulary of propositions.
+
+    Returns
+    -------
+        preconditions : list[Proposition] | list[list[Proposition]]
+            The preconditions.
+    """
     symbol_indices = vocabulary.get_active_symbol_indices(x)
     if symbol_indices.ndim == 3:
         object_factored = True
@@ -192,7 +283,25 @@ def _compute_preconditions(x: np.ndarray, y: np.ndarray, vocabulary: UniquePredi
     return preds
 
 
-def _create_factored_densities(data, vocabulary, factors):
+def _create_factored_densities(data: np.ndarray, vocabulary: UniquePredicateList, factors: list[Factor]) \
+        -> list[KernelDensityEstimator]:
+    """
+    Create the factored densities from the given data.
+
+    Parameters
+    ----------
+        data : np.ndarray
+            The data.
+        vocabulary : UniquePredicateList
+            The vocabulary of propositions.
+        factors : list[Factor]
+            The factors.
+
+    Returns
+    -------
+        densities : list[KernelDensityEstimator]
+            The factored densities.
+    """
     # use validation samples for independency tests
     n_val = max(int(len(data) * 0.1), 3)
     densities = []
@@ -205,7 +314,25 @@ def _create_factored_densities(data, vocabulary, factors):
     return densities
 
 
-def _compute_factor_dependencies(data, factors, method="independent"):
+def _compute_factor_dependencies(data: np.ndarray, factors: list[Factor], method: str = "independent") \
+        -> list[list[Factor]]:
+    """
+    Compute the factor dependencies.
+
+    Parameters
+    ----------
+        data : np.ndarray
+            The data.
+        factors : list[Factor]
+            The factors.
+        method : str
+            The method to use for computing the factor dependencies.
+
+    Returns
+    -------
+        independent_factor_groups : list[list[Factor]]
+            The independent factor groups.
+    """
     if len(factors) == 1:
         return [factors]
 
@@ -217,7 +344,22 @@ def _compute_factor_dependencies(data, factors, method="independent"):
         return [[f] for f in factors]
 
 
-def _gaussian_independent_factor_groups(data, factors):
+def _gaussian_independent_factor_groups(data: np.ndarray, factors: list[Factor]) -> list[list[Factor]]:
+    """
+    Compute linear dependencies of factors.
+
+    Parameters
+    ----------
+        data : np.ndarray
+            The data.
+        factors : list[Factor]
+            The factors.
+
+    Returns
+    -------
+        independent_factor_groups : list[list[Factor]]
+            The independent factor groups.
+    """
     n_factors = len(factors)
     independent_factor_groups = []
     factor_vars = []
@@ -263,7 +405,22 @@ def _gaussian_independent_factor_groups(data, factors):
     return independent_factor_groups
 
 
-def _knn_independent_factor_groups(data, factors):
+def _knn_independent_factor_groups(data: np.ndarray, factors: list[Factor]) -> list[list[Factor]]:
+    """
+    Compute the independent factor groups using k-NN.
+
+    Parameters
+    ----------
+        data : np.ndarray
+            The data.
+        factors : list[Factor]
+            The factors.
+
+    Returns
+    -------
+        independent_factor_groups : list[list[Factor]]
+            The independent factor groups.
+    """
     n_factors = len(factors)
     independent_factor_groups = []
     remaining_factors = [f for f in factors]
@@ -296,15 +453,15 @@ def _overlapping_dists(x: KernelDensityEstimator, y: KernelDensityEstimator) -> 
     """
     A measure of similarity from the original paper that compares means, mins and maxes.
 
-    Parameters:
-    -----------
+    Parameters
+    ----------
         x : KernelDensityEstimator
             The first distribution.
         y : KernelDensityEstimator
             The second distribution.
 
-    Returns:
-    --------
+    Returns
+    -------
         bool: True if the distributions are similar, False otherwise.
     """
     if set(x.factors) != set(y.factors):
@@ -325,7 +482,26 @@ def _overlapping_dists(x: KernelDensityEstimator, y: KernelDensityEstimator) -> 
     return True
 
 
-def _knn_accuracy(x, y, k=5):
+def _knn_accuracy(x: np.ndarray, y: np.ndarray, k: int = 5) -> tuple[float, float]:
+    """
+    Compute classifier 2-sample test with k-NN.
+
+    Parameters
+    ----------
+        x : np.ndarray
+            The first dataset.
+        y : np.ndarray
+            The second dataset.
+        k : int
+            The number of nearest neighbors.
+
+    Returns
+    -------
+        x_acc : float
+            The accuracy of the classifier on the first dataset.
+        y_acc : float
+            The accuracy of the classifier on the second dataset.
+    """
     n_sample = x.shape[0]
     x = x.reshape(n_sample, -1)
     y = y.reshape(n_sample, -1)

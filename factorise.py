@@ -50,7 +50,7 @@ def factors_from_partitions(partitions: dict[tuple[int, int], S2SDataset], thres
 
 
 def add_factors_to_partitions(partitions: dict[tuple[int, int], S2SDataset], factors: list[Factor],
-                              threshold: float = 0.9):
+                              threshold: float = 0.9) -> None:
     """
     Add factors to the partitions. Mutates the partitions in place.
 

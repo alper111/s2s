@@ -51,8 +51,33 @@ class Factor:
 
 
 class S2SDataset:
+    """
+    A dataset of state-to-state transitions. Each sample consists of a state, an option, a reward,
+    the next state, and a mask that indicates which variables have changed between the state and the
+    next state. The dataset can be object-factored or not.
+    """
     def __init__(self, state: np.ndarray, option: np.ndarray, reward: np.ndarray,
                  next_state: np.ndarray, mask: np.ndarray, factors: list[Factor] = None):
+        """
+        Create a new dataset.
+
+        Parameters
+        ----------
+        state : np.ndarray
+            The state of the environment.
+        option : np.ndarray
+            The option that was executed.
+        reward : np.ndarray
+            The reward received.
+        next_state : np.ndarray
+            The next state of the environment.
+        mask : np.ndarray
+            The mask that indicates which variables have changed.
+
+        Returns
+        -------
+        None
+        """
         self.state = state
         self.option = option
         self.reward = reward
@@ -106,8 +131,12 @@ class KernelDensityEstimator:
 
         Parameters
         ----------
-        factor : Factor
-            The factor that the estimator models.
+        factors : list[Factor]
+            The factors that the estimator models.
+
+        Returns
+        -------
+        None
         """
         self._factors = factors
         self._kde: KernelDensity | None = None
@@ -140,16 +169,10 @@ class KernelDensityEstimator:
 
     @property
     def factors(self) -> list[Factor]:
-        """
-        Get the effect factors.
-        """
         return self._factors
 
     @property
     def variables(self) -> list[int]:
-        """
-        Get the variables of factors.
-        """
         variables = []
         for f in self.factors:
             variables.extend(f.variables)
@@ -157,9 +180,6 @@ class KernelDensityEstimator:
 
     @property
     def factor_indices(self) -> dict[Factor, int]:
-        """
-        Get the indices that each factor corresponds to.
-        """
         indices = {}
         it = 0
         for f in self.factors:
@@ -223,6 +243,22 @@ class Proposition:
     """
 
     def __init__(self, idx: int, name: str, kde: KernelDensityEstimator | None):
+        """
+        Create a new predicate.
+
+        Parameters
+        ----------
+        idx : int
+            The index of the predicate.
+        name : str
+            The name of the predicate.
+        kde : KernelDensityEstimator
+            The density estimator that models the predicate.
+
+        Returns
+        -------
+        None
+        """
         self._idx = idx
         self._name = name
         self._kde = kde
@@ -311,7 +347,7 @@ class UniquePredicateList:
         self.factors = None
         self.__idx = 0
 
-    def append(self, data: np.ndarray, factors: list[Factor]):
+    def append(self, data: np.ndarray, factors: list[Factor]) -> Proposition:
         """
         Adds a predicate to the predicate list. If the predicate covers multiple factors,
         all possible combinations of projections are added to the vocabulary as well.
@@ -367,10 +403,41 @@ class UniquePredicateList:
 
         return base_predicate
 
-    def add_projection(self, symbol: Proposition, factor: Factor, projection: Proposition):
+    def add_projection(self, symbol: Proposition, factor: Factor, projection: Proposition) -> None:
+        """
+        Add a projection to the vocabulary.
+
+        Parameters
+        ----------
+        symbol : Proposition
+            The original symbol.
+        factor : Factor
+            The factor that is projected out.
+        projection : Proposition
+            The projected symbol.
+
+        Returns
+        -------
+        None
+        """
         self._projections[symbol.idx][factor] = projection.idx
 
     def project(self, symbol: Proposition, factors: list[Factor]) -> Proposition:
+        """
+        Project a symbol to a subset of factors.
+
+        Parameters
+        ----------
+        symbol : Proposition
+            The symbol to be projected.
+        factors : list[Factor]
+            The factors to project out.
+
+        Returns
+        -------
+        Proposition
+            The projected symbol.
+        """
         if len(factors) == 0:
             return symbol
         elif len(symbol.factors) == 1 and len(factors) == 1:
@@ -387,6 +454,20 @@ class UniquePredicateList:
                 return self.project(symbol, factors[1:])
 
     def get_active_symbol_indices(self, observation: np.ndarray) -> np.ndarray:
+        """
+        Get the index of the active symbol for each factor.
+
+        Parameters
+        ----------
+        observation : np.ndarray
+            The observation to evaluate.
+
+        Returns
+        -------
+        np.ndarray
+            An array of size [n_sample, n_factors] or [n_sample, n_obj, n_factors] containing the index of the
+            active symbol for each factor.
+        """
         assert self.mutex_groups is not None, "Mutually exclusive factors are not defined."
         n_factors = len(self.mutex_groups)
 
@@ -428,6 +509,18 @@ class UniquePredicateList:
         return indices
 
     def fill_mutex_groups(self, factors: list[Factor]) -> None:
+        """
+        Fill the mutex groups for each factor.
+
+        Parameters
+        ----------
+        factors : list[Factor]
+            The factors to consider.
+
+        Returns
+        -------
+        None
+        """
         self.mutex_groups = defaultdict(list)
         self.factors = factors
         for factor in factors:
@@ -471,25 +564,97 @@ class UniquePredicateList:
 
 
 class ActionSchema:
+    """
+    An action schema in PDDL. An action schema is a template for an action that can be instantiated
+    with different objects.
+    """
     def __init__(self, name: str):
+        """
+        Create a new action schema.
+
+        Parameters
+        ----------
+        name : str
+            The name of the action schema.
+
+        Returns
+        -------
+        None
+        """
         self.name = name.replace(' ', '-')
         self.preconditions = []
         self.effects = []
         self.obj_preconditions = {}
         self.obj_effects = defaultdict(list)
 
-    def add_preconditions(self, predicates: list[Proposition]):
+    def add_preconditions(self, predicates: list[Proposition]) -> None:
+        """
+        Add preconditions to the action schema.
+
+        Parameters
+        ----------
+        predicates : list[Proposition]
+            The preconditions to add.
+
+        Returns
+        -------
+        None
+        """
         self.preconditions.extend(predicates)
 
-    def add_obj_preconditions(self, obj_idx: str, predicates: list[Proposition]):
+    def add_obj_preconditions(self, obj_idx: str, predicates: list[Proposition]) -> None:
+        """
+        Add object-specific preconditions to the action schema.
+
+        Parameters
+        ----------
+        obj_idx : str
+            The object index.
+        predicates : list[Proposition]
+            The preconditions to add.
+
+        Returns
+        -------
+        None
+        """
         if obj_idx not in self.obj_preconditions:
             self.obj_preconditions[obj_idx] = []
         self.obj_preconditions[obj_idx].extend(predicates)
 
-    def add_effect(self, effect: list[Proposition], probability: float = 1):
+    def add_effect(self, effect: list[Proposition], probability: float = 1) -> None:
+        """
+        Add effects to the action schema.
+
+        Parameters
+        ----------
+        effect : list[Proposition]
+            The effects to add.
+        probability : float, optional
+            The probability of the effect. Default is 1.
+
+        Returns
+        -------
+        None
+        """
         self.effects.append((probability, effect))
 
     def add_obj_effect(self, obj_idx: str, effect: list[Proposition], probability: float = 1):
+        """
+        Add object-specific effects to the action schema.
+
+        Parameters
+        ----------
+        obj_idx : str
+            The object index.
+        effect : list[Proposition]
+            The effects to add.
+        probability : float, optional
+            The probability of the effect. Default is 1.
+
+        Returns
+        -------
+        None
+        """
         self.obj_effects[obj_idx].append((probability, effect))
 
     def is_probabilistic(self):
@@ -561,7 +726,29 @@ def _proposition_to_str(proposition: Proposition | list[Proposition], name: str 
 
 
 class PDDLDomain:
+    """
+    A PDDL domain. A domain is a set of predicates, actions, and operators that define the state space
+    and the actions that can be taken in that state space.
+    """
     def __init__(self, name: str, vocabulary: UniquePredicateList, operators: list[ActionSchema], lifted: bool = False):
+        """
+        Create a new PDDL domain.
+
+        Parameters
+        ----------
+        name : str
+            The name of the domain.
+        vocabulary : UniquePredicateList
+            The vocabulary of the domain.
+        operators : list[ActionSchema]
+            The action schemas of the domain.
+        lifted : bool, optional
+            Whether the domain is lifted or not. Default is False.
+
+        Returns
+        -------
+        None
+        """
         self.name = name
         self.vocabulary = vocabulary
         self.num_operators = len(operators)
@@ -573,6 +760,19 @@ class PDDLDomain:
         self._requirements = "\t(:requirements :strips)"
 
     def active_symbols(self, observation: np.ndarray) -> list[Proposition]:
+        """
+        Get the active symbols in the observation.
+
+        Parameters
+        ----------
+        observation : np.ndarray
+            The observation to evaluate.
+
+        Returns
+        -------
+        active_symbols : list[Proposition]
+            The active symbols in the observation.
+        """
         assert self.vocabulary.mutex_groups is not None, "Mutually exclusive factors are not defined."
 
         active_symbols = {}
@@ -631,7 +831,25 @@ class PDDLDomain:
 
 
 class PDDLProblem:
+    """
+    A PDDL problem. A problem is a specific instance of a domain. It defines the initial state of the
+    environment and the goal state that the agent should reach.
+    """
     def __init__(self, problem_name: str, domain_name: str):
+        """
+        Create a new PDDL problem.
+
+        Parameters
+        ----------
+        problem_name : str
+            The name of the problem.
+        domain_name : str
+            The name of the domain.
+
+        Returns
+        -------
+        None
+        """
         self.name = problem_name
         self.domain = domain_name
         self.init_propositions = []
