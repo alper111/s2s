@@ -215,15 +215,6 @@ class KernelDensityEstimator:
         return kde
 
 
-class Operator:
-    def __init__(self, option: int, partition: int, precondition: list[SupportVectorClassifier],
-                 effect: list[KernelDensityEstimator]):
-        self.option = option
-        self.partition = partition
-        self.precondition = precondition
-        self.effect = effect
-
-
 class Proposition:
     """
     A predicate over one or more factors.
