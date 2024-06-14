@@ -427,11 +427,12 @@ def _proposition_to_str(proposition: Proposition | list[Proposition], name: str 
 
 
 class PDDLDomain:
-    def __init__(self, name: str, vocabulary: UniquePredicateList, operators: list[ActionSchema]):
+    def __init__(self, name: str, vocabulary: UniquePredicateList, operators: list[ActionSchema], lifted: bool = False):
         self.name = name
         self.vocabulary = vocabulary
         self.num_operators = len(operators)
         self.operator_str = "\n\n".join([str(x) for x in operators])
+        self.lifted = lifted
 
         self._comment = f";Automatically generated {self.name} domain PDDL file."
         self._definition = f"define (domain {self.name})"
