@@ -114,6 +114,6 @@ def _modifies(partitions: dict[tuple[int, int], S2SDataset], threshold: float = 
         partition = partitions[p_i]
         avg_mask = partition.mask.mean(axis=0)
         for x in range(n_variables):
-            if avg_mask[x] > threshold:
+            if (avg_mask[..., x] > threshold).any():
                 modifies[x].append(p_i)  # modifies[s] -> [(o1, p1), (o2, p2), ...]
     return modifies
