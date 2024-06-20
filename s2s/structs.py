@@ -105,8 +105,7 @@ class S2SDataset:
         return len(self.state)
 
     def __getitem__(self, item):
-        return S2SDataset(self.state[item], self.option[item], self.reward[item],
-                          self.next_state[item], self.mask[item])
+        return self.state[item], self.option[item], self.reward[item], self.next_state[item], self.mask[item]
 
     def __repr__(self) -> str:
         return self.__str__()

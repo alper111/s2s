@@ -1,7 +1,7 @@
 from collections import defaultdict
 import logging
 
-from structs import S2SDataset, Factor
+from s2s.structs import S2SDataset, Factor
 
 logger = logging.getLogger(__name__)
 

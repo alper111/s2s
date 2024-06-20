@@ -4,7 +4,7 @@ import logging
 import numpy as np
 from scipy.spatial.distance import cdist
 
-from structs import S2SDataset, sort_dataset
+from s2s.structs import S2SDataset, sort_dataset
 
 logger = logging.getLogger(__name__)
 

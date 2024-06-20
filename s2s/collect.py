@@ -3,7 +3,7 @@ from typing import Callable
 import gymnasium as gym
 import numpy as np
 
-from structs import S2SDataset
+from s2s.structs import S2SDataset
 from environment import ObjectCentricEnv
 
 
@@ -26,13 +26,14 @@ def collect(n: int, env: gym.Env | ObjectCentricEnv, options: dict[str, Callable
         Dataset of <state, action, reward, next_state, mask> tuples.
     """
     if isinstance(env.observation_space, gym.spaces.Box):
+        obj_centric = False
         obs_shape = (n,) + env.observation_space.shape
         act_shape = (n,)
     elif isinstance(env.observation_space, gym.spaces.Sequence):
         assert isinstance(env.observation_space.feature_space, gym.spaces.Box)
-        assert isinstance(env, ObjectCentricEnv)
+        obj_centric = True
         obs_shape = (n, env.max_objects) + env.observation_space.feature_space.shape
-        act_shape = (n, 2)
+        act_shape = (n,)
 
     state_arr = np.zeros(obs_shape, dtype=np.float32)
     action_arr = np.zeros(act_shape, dtype=int)
@@ -53,9 +54,9 @@ def collect(n: int, env: gym.Env | ObjectCentricEnv, options: dict[str, Callable
                 # select a random option o with I_o > 0
                 # execute it in a loop till it terminates
                 pass
-            if isinstance(env, ObjectCentricEnv):
-                next_state, reward, term, trun, info = env.step(state, action)
-                action = np.array([action, info["acted_object"]])
+            if obj_centric:
+                next_state, reward, term, trun, _ = env.step(action)
+                # action = np.array([action, info["acted_object"]])
             else:
                 next_state, reward, term, trun, _ = env.step(action)
             opt_mask = state != next_state

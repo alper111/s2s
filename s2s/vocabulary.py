@@ -5,8 +5,8 @@ import numpy as np
 from scipy import stats
 from scipy.spatial.distance import cdist
 
-from structs import (KernelDensityEstimator, UniquePredicateList, Factor,
-                     Proposition, ActionSchema, S2SDataset)
+from s2s.structs import (KernelDensityEstimator, UniquePredicateList, Factor,
+                         Proposition, ActionSchema, S2SDataset)
 
 __author__ = 'Steve James and George Konidaris'
 # Modified by Alper Ahmetoglu. Original source:
@@ -50,6 +50,7 @@ def build_vocabulary(partitions: dict[tuple[int, int], S2SDataset], factors: lis
         eff_props[key] = preds
 
     vocabulary.fill_mutex_groups(factors)
+
     for f_i, factor in enumerate(vocabulary.mutex_groups):
         group = vocabulary.mutex_groups[factor]
         # no effect changes this factor, but there might be preconditions that depend on this factor.
