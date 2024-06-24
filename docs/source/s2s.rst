@@ -20,14 +20,6 @@ s2s.factorise module
    :undoc-members:
    :show-inheritance:
 
-s2s.layers module
------------------
-
-.. automodule:: s2s.layers
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
 s2s.partition module
 --------------------
 
