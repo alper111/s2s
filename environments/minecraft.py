@@ -3,9 +3,13 @@ import numpy as np
 
 
 def look_at_block(env, x, y, z):
+    # get the center of the block
+    ox, oy, oz = x+0.5, y+0.5, z+0.5
     agent_x, agent_y, agent_z = env.prev_obs['location_stats']['pos']
+    # add eye-height to y, which is 1 + 10/16
+    eye_y = agent_y + 1 + 10/16
     print(f"Previous Pitch: {env.prev_obs['location_stats']['pitch']}, Yaw: {env.prev_obs['location_stats']['yaw']}")
-    dx, dy, dz = x - agent_x, y - agent_y, z - agent_z
+    dx, dy, dz = ox - agent_x, oy - eye_y, oz - agent_z
     yaw = np.degrees(np.arctan2(-dx, dz))
     pitch = np.degrees(np.arctan2(-dy, np.sqrt(dx**2 + dz**2)))
     print(f"Looking at {x}, {y}, {z} with yaw {yaw} and pitch {pitch}")
@@ -31,7 +35,7 @@ def observe(env, x, y, z):
         [0, np.cos(pitch), -np.sin(pitch)],
         [0, np.sin(pitch), np.cos(pitch)],
     ])
-    rotationMatrix = pitchMatrix @ yawMatrix
+    rotationMatrix = yawMatrix @ pitchMatrix
     agent_pos = np.array([agent_x, agent_y, agent_z]).reshape(-1, 1)
     world_to_agent = np.hstack([rotationMatrix.T, -rotationMatrix.T @ agent_pos])
     world_to_agent = np.vstack([world_to_agent, np.array([0, 0, 0, 1])])
