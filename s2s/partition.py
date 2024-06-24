@@ -1,9 +1,12 @@
 from collections import defaultdict
+import logging
 
 import numpy as np
 from scipy.spatial.distance import cdist
 
-from structs import S2SDataset, sort_dataset
+from s2s.structs import S2SDataset, sort_dataset
+
+logger = logging.getLogger(__name__)
 
 
 def partition_to_subgoal(dataset: S2SDataset) -> dict[tuple[int, int], S2SDataset]:
@@ -25,16 +28,15 @@ def partition_to_subgoal(dataset: S2SDataset) -> dict[tuple[int, int], S2SDatase
     # split by options
     option_partitions = _split_by_options(dataset)
 
-    opt_idx = 0
     # partition each option by mask and abstract effect
     for o_i, partition_k in option_partitions.items():
         # compute masked effect
-        flat_dataset = sort_dataset(partition_k, mask_full_obj=False, flatten=True)
+        flat_dataset = sort_dataset(partition_k, mask_pos_feats=True, flatten=True)
         abstract_effect = flat_dataset.next_state * flat_dataset.mask
 
         # partition by abstract effect
-        abs_eff_partitions = _partition(abstract_effect)
-        print(f"Option {o_i} has {len(abs_eff_partitions)} abstract effects.")
+        abs_eff_partitions, _ = _partition(abstract_effect)
+        logger.info(f"Option {o_i} has {len(abs_eff_partitions)} abstract effects.")
         it = 0
         for eff in abs_eff_partitions:
             idx_i = abs_eff_partitions[eff]
@@ -45,9 +47,8 @@ def partition_to_subgoal(dataset: S2SDataset) -> dict[tuple[int, int], S2SDatase
                 partition_k.next_state[idx_i],
                 partition_k.mask[idx_i]
             )
-            partitions[(opt_idx, it)] = sort_dataset(partition, mask_full_obj=False)
+            partitions[(o_i, it)] = sort_dataset(partition, shuffle_only_nonmask=True)
             it += 1
-        opt_idx += 1
 
     # TODO: merge partitions with intersecting initiation sets
     # partitions = _merge_partitions(partitions)
@@ -118,13 +119,13 @@ def _partition(x: np.ndarray) -> dict[int, list]:
         A dictionary of partitioned indices.
     """
     # TODO: make this portion deep?
-    _, labels, _ = _x_means(x, 1, 200)
+    centroids, labels, _ = _x_means(x, 1, 50)
     partitions = {}
     for i in range(max(labels) + 1):
         indices = np.where(labels == i)[0].tolist()
         if len(indices) > 0:
             partitions[i] = indices
-    return partitions
+    return partitions, centroids
 
 
 def _k_means(x: np.ndarray, k: int, centroids: np.ndarray | None = None) -> tuple[np.ndarray, np.ndarray, float]:
@@ -225,7 +226,12 @@ def _extend_or_keep(x: np.ndarray, mu: np.ndarray) -> np.ndarray:
     child_centroids = np.zeros((2, x.shape[1]))
     child_centroids[0] = mu + radius * direction
     child_centroids[1] = mu - radius * direction
-    child_centroids, _, _ = _k_means(x, 2, centroids=child_centroids)
+    child_centroids, assigns, _ = _k_means(x, 2, centroids=child_centroids)
+
+    # require at least 10 points in each cluster
+    if (assigns == 0).sum() < 10 or (assigns == 1).sum() < 10:
+        return mu
+
     parent_bic = _bic(x, mu)
     children_bic = _bic(x, child_centroids)
     if parent_bic > children_bic:
@@ -265,8 +271,6 @@ def _x_means(x: np.ndarray, k_min: int, k_max: int) -> tuple[np.ndarray, np.ndar
         centroid_list = []
         change = False
         for i in range(k):
-            if (assigns == i).sum() < 3:
-                continue
             new_centroid = _extend_or_keep(x[(assigns == i)], centroids[i].reshape(1, -1))
             for m in new_centroid:
                 centroid_list.append(m.tolist())

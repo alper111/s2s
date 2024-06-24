@@ -1,0 +1,977 @@
+import logging
+from typing import Callable
+from collections import defaultdict
+import copy
+
+import numpy as np
+from sklearn.model_selection import GridSearchCV
+from sklearn.neighbors import KernelDensity
+
+
+__author__ = 'Steve James and George Konidaris'
+# Modified by Alper Ahmetoglu. Original source:
+# https://github.com/sd-james/skills-to-symbols/tree/master
+logger = logging.getLogger(__name__)
+
+
+class Factor:
+    """
+    A factor is a minimal set of state variables that can be changed by an option.
+    """
+    def __init__(self, indices: list[int]):
+        """
+        Create a new factor.
+
+        Parameters
+        ----------
+        indices : list[int]
+            The indices of the state variables that make up the factor.
+
+        Returns
+        -------
+        None
+        """
+        self._indices = indices
+
+    @property
+    def variables(self) -> list[int]:
+        return self._indices
+
+    def __eq__(self, other) -> bool:
+        return hash(self) == hash(other)
+
+    def __repr__(self) -> str:
+        return self.__str__()
+
+    def __str__(self) -> str:
+        return f"Factor({self._indices})"
+
+    def __hash__(self):
+        return hash(tuple(sorted(self.variables)))
+
+
+class S2SDataset:
+    """
+    A dataset of state-to-state transitions. Each sample consists of a state, an option, a reward,
+    the next state, and a mask that indicates which variables have changed between the state and the
+    next state. The dataset can be object-factored or not.
+    """
+    def __init__(self, state: np.ndarray, option: np.ndarray, reward: np.ndarray,
+                 next_state: np.ndarray, mask: np.ndarray, factors: list[Factor] = None):
+        """
+        Create a new dataset.
+
+        Parameters
+        ----------
+        state : np.ndarray
+            The state of the environment.
+        option : np.ndarray
+            The option that was executed.
+        reward : np.ndarray
+            The reward received.
+        next_state : np.ndarray
+            The next state of the environment.
+        mask : np.ndarray
+            The mask that indicates which variables have changed.
+
+        Returns
+        -------
+        None
+        """
+        self.state = state
+        self.option = option
+        self.reward = reward
+        self.next_state = next_state
+        self.mask = mask
+        self._factors = factors
+
+    @property
+    def factors(self):
+        return self._factors
+
+    @factors.setter
+    def factors(self, factors):
+        self._factors = factors
+
+    @property
+    def is_object_factored(self) -> bool:
+        return self.state.ndim == 3
+
+    @property
+    def n_objects(self) -> int:
+        return self.state.shape[1] if self.is_object_factored else 0
+
+    def __len__(self):
+        return len(self.state)
+
+    def __getitem__(self, item):
+        return self.state[item], self.option[item], self.reward[item], self.next_state[item], self.mask[item]
+
+    def __repr__(self) -> str:
+        return self.__str__()
+
+    def __str__(self) -> str:
+        if self.state.ndim == 2:
+            n_factor = len(self.factors) if self.factors is not None else "unset"
+            return f"S2SDataset(n_sample={len(self)}, n_feature={self.state.shape[1]}, n_factor={n_factor})"
+        n_factor = sum([len(obj) for obj in self.factors]) if self.factors is not None else "unset"
+        return f"S2SDataset(n_sample={len(self)}, n_object={self.state.shape[1]}, " + \
+               f"n_feature={self.state.shape[2]}, n_factor={n_factor})"
+
+
+class KernelDensityEstimator:
+    """
+    A density estimator that models a distribution over a factor (a set of low-level states).
+    """
+
+    def __init__(self, factors: list[Factor]):
+        """
+        Initialize a new estimator.
+
+        Parameters
+        ----------
+        factors : list[Factor]
+            The factors that the estimator models.
+
+        Returns
+        -------
+        None
+        """
+        self._factors = factors
+        self._kde: KernelDensity | None = None
+
+    def fit(self, X: np.ndarray, **kwargs) -> None:
+        """
+        Fit the data to the effect estimator using a grid search for the hyperparameters with cross-validation.
+
+        Parameters
+        ----------
+        X : np.ndarray
+            The data.
+        **kwargs : dict
+            Additional keyword arguments.
+
+        Returns
+        -------
+        None
+        """
+        if kwargs.get('masked', False):
+            data = X  # already been masked
+        else:
+            data = X[:, self.variables]
+        bandwidth_range = kwargs.get('effect_bandwidth_range', np.logspace(-3, 1, 20))
+        params = {'bandwidth': bandwidth_range}
+        grid = GridSearchCV(KernelDensity(kernel='gaussian'), params, cv=3)
+        grid.fit(data)
+        # logger.debug("Best bandwidth hyperparameter: {}".format(grid.best_params_['bandwidth']))
+        self._kde = grid.best_estimator_
+
+    @property
+    def factors(self) -> list[Factor]:
+        return self._factors
+
+    @property
+    def variables(self) -> list[int]:
+        variables = []
+        for f in self.factors:
+            variables.extend(f.variables)
+        return variables
+
+    @property
+    def factor_indices(self) -> dict[Factor, int]:
+        indices = {}
+        it = 0
+        for f in self.factors:
+            n_vars = len(f.variables)
+            rng = list(range(it, n_vars))
+            indices[f] = rng
+            it += len(f)
+        return indices
+
+    def sample(self, n_samples=100) -> np.ndarray:
+        """
+        Sample data from the density estimator.
+
+        Parameters
+        ----------
+        n_samples : int, optional
+            The number of samples to generate. Default is 100.
+
+        Returns
+        -------
+        data : np.ndarray
+            An array of size [n_samples, len(mask)] containing the sampled data.
+        """
+        assert isinstance(self._kde, KernelDensity), "Estimator not trained yet"
+        data = self._kde.sample(n_samples)
+        if data.ndim == 1:  # ensure always shape of (N X D)
+            data = np.reshape(data, (data.shape[0], 1))
+        return data
+
+    def integrate_out(self, factor_list: list[Factor], **kwargs) -> 'KernelDensityEstimator':
+        """
+        Integrate out the given factors from the distribution.
+
+        Parameters
+        ----------
+        factor_list : list[Factor]
+            A list of factors to be marginalized out from the distribution.
+
+        Returns
+        -------
+        KernelDensityEstimator
+            A new distribution equal to the original distribution with the specified factors marginalized out.
+        """
+        rem_factors = []
+        rem_factor_indices = []
+        for f in self.factors:
+            if f not in factor_list:
+                rem_factors.append(f)
+                rem_factor_indices.extend(self.factor_indices[f])
+        n_samples = kwargs.get('estimator_samples', 100)
+        new_samples = self.sample(n_samples)[:, rem_factor_indices]
+        kde = KernelDensityEstimator(factors=rem_factors)
+        kwargs['masked'] = True  # the data has already been masked
+        kde.fit(new_samples, **kwargs)
+        return kde
+
+
+class Proposition:
+    """
+    A predicate over one or more factors.
+    """
+
+    def __init__(self, idx: int, name: str, kde: KernelDensityEstimator | None):
+        """
+        Create a new predicate.
+
+        Parameters
+        ----------
+        idx : int
+            The index of the predicate.
+        name : str
+            The name of the predicate.
+        kde : KernelDensityEstimator
+            The density estimator that models the predicate.
+
+        Returns
+        -------
+        None
+        """
+        self._idx = idx
+        self._name = name
+        self._kde = kde
+        self.sign = 1  # whether true or the negation of the predicate
+
+    @property
+    def estimator(self) -> KernelDensityEstimator | None:
+        return self._kde
+
+    @property
+    def name(self) -> str:
+        return self._name
+
+    @property
+    def idx(self) -> int:
+        return self._idx
+
+    @property
+    def factors(self) -> list[Factor]:
+        assert isinstance(self._kde, KernelDensityEstimator)
+        return self._kde.factors
+
+    @property
+    def variables(self) -> list[int]:
+        assert isinstance(self._kde, KernelDensityEstimator)
+        return self._kde.variables
+
+    def sample(self, n_samples) -> np.ndarray:
+        assert isinstance(self._kde, KernelDensityEstimator)
+        return self._kde.sample(n_samples)
+
+    def is_grounded(self) -> bool:
+        return False
+
+    def is_independent(self) -> bool:
+        return len(self.factors) == 1
+
+    def negate(self) -> 'Proposition':
+        """"
+        Creates a negated copy of the predicate.
+        """
+        clone = copy.copy(self)
+        clone.sign *= -1
+        return clone
+
+    def __repr__(self) -> str:
+        return self.__str__()
+
+    def __str__(self):
+        if self.sign < 0:
+            return 'not ({})'.format(self.name)
+        return self.name
+
+    def __hash__(self):
+        return hash(self._idx)
+
+    @staticmethod
+    def not_failed():
+        return Proposition(-2, "notfailed", None)
+
+    @staticmethod
+    def empty():
+        return Proposition(-1, "empty", None)
+
+
+class UniquePredicateList:
+    """
+    A class that wraps a list. The user add density estimators to the list,
+    and they are wrapped in PDDL predicates.  The list automatically deals
+    with duplicates.
+    """
+
+    def __init__(self, comparator: Callable[[KernelDensityEstimator, KernelDensityEstimator], bool] | None = None):
+        """
+        Create a list data structure that ensures no duplicates are added to the list.
+
+        Parameters
+        ----------
+        comparator : callable, optional
+            A function that accepts two objects and returns whether they are equal.
+        """
+        self._comparator = comparator if comparator is not None else lambda x, y: x is y
+        self._list = []
+        self._projections: list[dict[int, int | None]] = []
+        self.mutex_groups = None
+        self.factors = None
+        self.__idx = 0
+
+    def append(self, data: np.ndarray, factors: list[Factor]) -> Proposition:
+        """
+        Adds a predicate to the predicate list. If the predicate covers multiple factors,
+        all possible combinations of projections are added to the vocabulary as well.
+
+        Parameters
+        ----------
+        data : np.ndarray
+            The data on which predicates are fit.
+        factors : list[Factor]
+            Factors to be modeled.
+
+        Returns
+        -------
+        base_predicate : Proposition
+            The newly created predicate for the given set of factors.
+        """
+        item = KernelDensityEstimator(factors)
+        item.fit(data)
+
+        # add all possible projections here.
+        # (new_estimator, projected_factor, parent_idx)
+        add_queue = [(item, None, None)]
+        base_predicate = None
+        size_before = len(self)
+        while len(add_queue) > 0:
+            estimator, p_factor, parent_idx = add_queue.pop(0)
+            # TODO: KD-Tree-like hash function on the estimator?
+            idx = self._get_or_none(estimator)
+            if idx != -1:
+                predicate = self._list[idx]
+            else:
+                # create a new predicate for this estimator and add it to the vocabulary
+                idx = len(self._list)
+                predicate = Proposition(idx, f'symbol_{idx}', estimator)
+                self._list.append(predicate)
+                self._projections.append({})
+                # if there are remaining factors to be projected, add them to the queue
+                if not predicate.is_independent():
+                    for f in predicate.factors:
+                        rem_factors = [fac for fac in predicate.factors if fac != f]
+                        child_item = KernelDensityEstimator(rem_factors)
+                        child_item.fit(data)
+                        add_queue.append((child_item, f, idx))
+
+            # if this estimator is from a previous projection, set it.
+            if p_factor is not None:
+                self._projections[parent_idx][p_factor] = idx
+
+            if base_predicate is None:
+                base_predicate = predicate
+        size_after = len(self)
+        logger.debug(f"Vocabulary size={len(self)}; {size_after-size_before} new predicates.")
+
+        return base_predicate
+
+    def add_projection(self, symbol: Proposition, factor: Factor, projection: Proposition) -> None:
+        """
+        Add a projection to the vocabulary.
+
+        Parameters
+        ----------
+        symbol : Proposition
+            The original symbol.
+        factor : Factor
+            The factor that is projected out.
+        projection : Proposition
+            The projected symbol.
+
+        Returns
+        -------
+        None
+        """
+        self._projections[symbol.idx][factor] = projection.idx
+
+    def project(self, symbol: Proposition, factors: list[Factor]) -> Proposition:
+        """
+        Project a symbol to a subset of factors.
+
+        Parameters
+        ----------
+        symbol : Proposition
+            The symbol to be projected.
+        factors : list[Factor]
+            The factors to project out.
+
+        Returns
+        -------
+        Proposition
+            The projected symbol.
+        """
+        if len(factors) == 0:
+            return symbol
+        elif len(symbol.factors) == 1 and len(factors) == 1:
+            if factors[0] in symbol.factors:
+                return Proposition.empty()
+            else:
+                return symbol
+        else:
+            if factors[0] in symbol.factors:
+                proj_f0_idx = self._projections[symbol.idx][factors[0]]
+                proj_f0 = self[proj_f0_idx]
+                return self.project(proj_f0, factors[1:])
+            else:
+                return self.project(symbol, factors[1:])
+
+    def get_active_symbol_indices(self, observation: np.ndarray) -> np.ndarray:
+        """
+        Get the index of the active symbol for each factor.
+
+        Parameters
+        ----------
+        observation : np.ndarray
+            The observation to evaluate.
+
+        Returns
+        -------
+        np.ndarray
+            An array of size [n_sample, n_factors] or [n_sample, n_obj, n_factors] containing the index of the
+            active symbol for each factor.
+        """
+        assert self.mutex_groups is not None, "Mutually exclusive factors are not defined."
+        n_factors = len(self.mutex_groups)
+
+        if observation.ndim == 3:
+            n_sample, n_obj, _ = observation.shape
+            object_factored = True
+        elif observation.ndim == 2:
+            n_sample, _ = observation.shape
+            object_factored = False
+        else:
+            raise ValueError("Invalid observation shape.")
+
+        if object_factored:
+            indices = np.zeros((n_sample, n_obj, n_factors), dtype=int)
+        else:
+            indices = np.zeros((n_sample, n_factors), dtype=int)
+
+        for f_i, factor in enumerate(self.mutex_groups):
+            group = self.mutex_groups[factor]
+            n_sym = len(group)
+            if n_sym == 0:
+                raise ValueError("This shouldn't happen?!")
+
+            masked_obs = observation[..., factor.variables]
+            if object_factored:
+                scores = np.zeros((n_sample, n_obj, n_sym))
+                masked_obs = masked_obs.reshape(n_sample * n_obj, -1)
+            else:
+                scores = np.zeros((n_sample, n_sym))
+
+            for p_i, idx in enumerate(group):
+                prop = self._list[idx]
+                s = prop.estimator._kde.score_samples(masked_obs)
+                if object_factored:
+                    s = s.reshape(n_sample, n_obj)
+                scores[..., p_i] = s
+
+            indices[..., f_i] = np.argmax(scores, axis=-1)
+        return indices
+
+    def fill_mutex_groups(self, factors: list[Factor]) -> None:
+        """
+        Fill the mutex groups for each factor.
+
+        Parameters
+        ----------
+        factors : list[Factor]
+            The factors to consider.
+
+        Returns
+        -------
+        None
+        """
+        self.mutex_groups = defaultdict(list)
+        self.factors = factors
+        for factor in factors:
+            for i, prop in enumerate(self._list):
+                # only consider propositions with a single factor for now
+                if (len(prop.factors) == 1) and (prop.factors[0] == factor):
+                    self.mutex_groups[factor].append(i)
+            # add empty list if there are no predicates for this factor
+            if len(self.mutex_groups[factor]) == 0:
+                self.mutex_groups[factor] = []
+
+    def _get_or_none(self, item) -> int:
+        for i, x in enumerate(self._list):
+            if self._comparator(item, x.estimator):
+                return i
+        return -1
+
+    def __getitem__(self, item: int | slice | list | tuple) -> Proposition | list[Proposition]:
+        if isinstance(item, int):
+            return self._list[item]
+        elif isinstance(item, slice):
+            return self._list[item]
+        elif isinstance(item, list):
+            return [self._list[i] for i in item]
+        elif isinstance(item, tuple):
+            return [self._list[i] for i in item]
+
+    def __iter__(self):
+        self.__idx = 0
+        return self
+
+    def __next__(self) -> Proposition:
+        if self.__idx < 0 or self.__idx >= len(self):
+            raise StopIteration
+        x = self._list[self.__idx]
+        self.__idx += 1
+        return x
+
+    def __len__(self):
+        return len(self._list)
+
+
+class ActionSchema:
+    """
+    An action schema in PDDL. An action schema is a template for an action that can be instantiated
+    with different objects.
+    """
+    def __init__(self, name: str):
+        """
+        Create a new action schema.
+
+        Parameters
+        ----------
+        name : str
+            The name of the action schema.
+
+        Returns
+        -------
+        None
+        """
+        self.name = name.replace(' ', '-')
+        self.preconditions = []
+        self.effects = []
+        self.obj_preconditions = {}
+        self.obj_effects = defaultdict(list)
+
+    def add_preconditions(self, predicates: list[Proposition]) -> None:
+        """
+        Add preconditions to the action schema.
+
+        Parameters
+        ----------
+        predicates : list[Proposition]
+            The preconditions to add.
+
+        Returns
+        -------
+        None
+        """
+        self.preconditions.extend(predicates)
+
+    def add_obj_preconditions(self, obj_idx: str, predicates: list[Proposition]) -> None:
+        """
+        Add object-specific preconditions to the action schema.
+
+        Parameters
+        ----------
+        obj_idx : str
+            The object index.
+        predicates : list[Proposition]
+            The preconditions to add.
+
+        Returns
+        -------
+        None
+        """
+        if obj_idx not in self.obj_preconditions:
+            self.obj_preconditions[obj_idx] = []
+        self.obj_preconditions[obj_idx].extend(predicates)
+
+    def add_effect(self, effect: list[Proposition], probability: float = 1) -> None:
+        """
+        Add effects to the action schema.
+
+        Parameters
+        ----------
+        effect : list[Proposition]
+            The effects to add.
+        probability : float, optional
+            The probability of the effect. Default is 1.
+
+        Returns
+        -------
+        None
+        """
+        self.effects.append((probability, effect))
+
+    def add_obj_effect(self, obj_idx: str, effect: list[Proposition], probability: float = 1):
+        """
+        Add object-specific effects to the action schema.
+
+        Parameters
+        ----------
+        obj_idx : str
+            The object index.
+        effect : list[Proposition]
+            The effects to add.
+        probability : float, optional
+            The probability of the effect. Default is 1.
+
+        Returns
+        -------
+        None
+        """
+        self.obj_effects[obj_idx].append((probability, effect))
+
+    def is_probabilistic(self):
+        # TODO: no probabilistic effects for now
+        return False
+        # return len(self.effects) > 1
+
+    def __repr__(self) -> str:
+        return self.__str__()
+
+    def __str__(self):
+        precondition = ""
+        effect = ""
+        if len(self.preconditions) > 0:
+            precondition += _proposition_to_str(self.preconditions)
+        if len(self.effects) > 0:
+            effects = max(self.effects, key=lambda x: x[0])
+            effect += _proposition_to_str(effects[1], None)
+        parameters = []
+        for name in self.obj_preconditions:
+            if len(self.obj_preconditions[name]) == 0:
+                continue
+            parameters.append(name)
+            if len(precondition) > 0:
+                precondition += " "
+            precondition += _proposition_to_str(self.obj_preconditions[name], name)
+
+        for name in self.obj_effects:
+            max_effect = max(self.obj_effects[name], key=lambda x: x[0])
+            if len(max_effect[1]) == 0:
+                continue
+
+            if name not in parameters:
+                parameters.append(name)
+            if len(effect) > 0:
+                effect += " "
+
+            effect += _proposition_to_str(max_effect[1], name)
+        parameters = " ".join([f"?{name}" for name in parameters])
+
+        schema = f"(:action {self.name}\n" + \
+                 f"\t:parameters ({parameters})\n" + \
+                 f"\t:precondition (and {precondition})\n" + \
+                 f"\t:effect (and {effect})\n)"
+        return schema
+
+
+def _proposition_to_str(proposition: Proposition | list[Proposition], name: str = None) -> str:
+    if isinstance(proposition, Proposition):
+        prop = proposition.name
+        if name is not None:
+            prop = f"{prop} ?{name}"
+        if proposition.sign < 0:
+            return f"(not ({prop}))"
+    elif isinstance(proposition, list):
+        if len(proposition) == 0:
+            return ""
+
+        props = []
+        for prop in proposition:
+            p = prop.name
+            if name is not None:
+                p = f"{p} ?{name}"
+            if prop.sign < 0:
+                props.append(f"(not ({p}))")
+            else:
+                props.append(f"({p})")
+        return " ".join(props)
+
+
+class PDDLDomain:
+    """
+    A PDDL domain. A domain is a set of predicates, actions, and operators that define the state space
+    and the actions that can be taken in that state space.
+    """
+    def __init__(self, name: str, vocabulary: UniquePredicateList, operators: list[ActionSchema], lifted: bool = False):
+        """
+        Create a new PDDL domain.
+
+        Parameters
+        ----------
+        name : str
+            The name of the domain.
+        vocabulary : UniquePredicateList
+            The vocabulary of the domain.
+        operators : list[ActionSchema]
+            The action schemas of the domain.
+        lifted : bool, optional
+            Whether the domain is lifted or not. Default is False.
+
+        Returns
+        -------
+        None
+        """
+        self.name = name
+        self.vocabulary = vocabulary
+        self.num_operators = len(operators)
+        self.operator_str = "\n\n".join([str(x) for x in operators])
+        self.lifted = lifted
+
+        self._comment = f";Automatically generated {self.name} domain PDDL file."
+        self._definition = f"define (domain {self.name})"
+        self._requirements = "\t(:requirements :strips)"
+
+    def active_symbols(self, observation: np.ndarray) -> list[Proposition]:
+        """
+        Get the active symbols in the observation.
+
+        Parameters
+        ----------
+        observation : np.ndarray
+            The observation to evaluate.
+
+        Returns
+        -------
+        active_symbols : list[Proposition]
+            The active symbols in the observation.
+        """
+        assert self.vocabulary.mutex_groups is not None, "Mutually exclusive factors are not defined."
+
+        active_symbols = {}
+        if observation.ndim == 1:
+            # global observation
+            active_symbols["global"] = self._get_active_symbols(observation)
+        else:
+            # object-factored observation
+            for o_i in range(observation.shape[0]):
+                name = f"obj{o_i}"
+                active_symbols[name] = self._get_active_symbols(observation[o_i])
+        return active_symbols
+
+    def _get_active_symbols(self, observation: np.ndarray) -> list[Proposition]:
+        active_symbols = []
+        for factor in self.vocabulary.mutex_groups:
+            group = self.vocabulary.mutex_groups[factor]
+            if len(group) == 0:
+                continue
+
+            scores = np.zeros(len(group))
+            masked_obs = observation[factor.variables].reshape(1, -1)
+            for p_i, idx in enumerate(group):
+                prop = self.vocabulary[idx]
+                scores[p_i] = prop.estimator._kde.score_samples(masked_obs)[0]
+            active_symbols.append(self.vocabulary[group[np.argmax(scores)]])
+        return active_symbols
+
+    def __str__(self):
+        symbols = "\t\t "
+        for i, p in enumerate(self.vocabulary):
+            # TODO: need to understand lifted propositions
+            # fixed to lifted propositions for now
+            if self.lifted:
+                symbols += f"({p} ?x)"
+            else:
+                symbols += f"({p})"
+
+            if (i+1) % 6 == 0:
+                symbols += "\n\t\t"
+            else:
+                symbols += " "
+
+        predicates = f"\t(:predicates\n{symbols}\n\t)"
+
+        description = f"{self._comment}\n" + \
+                      f"({self._definition}\n" + \
+                      f"{self._requirements}\n" + \
+                      f"{predicates}\n\n" + \
+                      f"{self.operator_str}\n)"
+        return description
+
+    def __repr__(self) -> str:
+        return f"{self._comment}\n({self._definition}\n{self._requirements}\n" + \
+               f"\t...{len(self.vocabulary)} symbols...\n\t...{self.num_operators} actions...\n)"
+
+
+class PDDLProblem:
+    """
+    A PDDL problem. A problem is a specific instance of a domain. It defines the initial state of the
+    environment and the goal state that the agent should reach.
+    """
+    def __init__(self, problem_name: str, domain_name: str):
+        """
+        Create a new PDDL problem.
+
+        Parameters
+        ----------
+        problem_name : str
+            The name of the problem.
+        domain_name : str
+            The name of the domain.
+
+        Returns
+        -------
+        None
+        """
+        self.name = problem_name
+        self.domain = domain_name
+        self.init_propositions = []
+        self.goal_propositions = []
+
+    def add_init_proposition(self, proposition: Proposition, name: str = None):
+        self.init_propositions.append((proposition, name))
+
+    def add_goal_proposition(self, proposition: Proposition, name: str = None):
+        self.goal_propositions.append((proposition, name))
+
+    def get_object_names(self) -> list[str]:
+        obj_names = []
+        for prop, name in self.init_propositions:
+            if name is not None and name not in obj_names:
+                obj_names.append(name)
+        for prop, name in self.goal_propositions:
+            if name is not None and name not in obj_names:
+                obj_names.append(name)
+        return obj_names
+
+    def __str__(self):
+        init = ""
+        for i, (prop, name) in enumerate(self.init_propositions):
+            if name is not None:
+                init += f"({prop} {name})"
+            else:
+                init += f"({prop})"
+            if (i+1) % 6 == 0:
+                init += "\n\t\t"
+            elif i < len(self.init_propositions) - 1:
+                init += " "
+        goal = ""
+        for i, (prop, name) in enumerate(self.goal_propositions):
+            if name is not None:
+                goal += f"({prop} {name})"
+            else:
+                goal += f"({prop})"
+            if (i+1) % 6 == 0:
+                goal += "\n\t\t"
+            elif i < len(self.goal_propositions) - 1:
+                goal += " "
+        description = f"(define (problem {self.name})\n" + \
+                      f"\t(:domain {self.domain})\n" + \
+                      f"\t(:objects {' '.join(self.get_object_names())})\n" + \
+                      f"\t(:init {init})\n" + \
+                      f"\t(:goal (and {goal}))\n)"
+        return description
+
+    def __repr__(self) -> str:
+        return self.__str__()
+
+
+def sort_dataset(dataset: S2SDataset, mask_full_obj: bool = False,
+                 mask_pos_feats: bool = False, flatten: bool = False,
+                 shuffle_only_nonmask: bool = False) -> S2SDataset:
+    """
+    Given a dataset with object-factored states, convert it to a canonical form
+    where objects that are affected by the action are followed by the non-affected
+    objects. This reduces the invariance between samples. Note that there might
+    still be invariances within affected objects and/or non-affected objects. Those
+    invariances should be resolved by merging equivalent schemas.
+
+    Parameters
+    ----------
+    dataset : S2SDataset
+        The dataset to be converted.
+    mask_full_obj : bool, optional
+        Whether to mask the full object or just the effected part of the object.
+    mask_nav_feats : bool, optional
+        Whether to mask features that are related to positions all together.
+    flatten : bool, optional
+        Whether to flatten the state into a fixed-size vector instead of a collection
+        of objects.
+    shuffle_only_nonmask : bool, optional
+        Whether to shuffle only the non-masked objects.
+
+    Returns
+    -------
+    S2SDataset
+        The dataset with a flattened state.
+    """
+
+    # flat already
+    if dataset.state.ndim == 2:
+        return dataset
+
+    assert dataset.state.ndim == 3, "State should be 3D: (n_samples, n_objects, n_features)"
+
+    n_sample, n_obj, n_feat = dataset.state.shape
+    state = np.zeros((n_sample, n_obj, n_feat))
+    next_state = np.zeros((n_sample, n_obj, n_feat))
+    mask = np.zeros((n_sample, n_obj, n_feat))
+
+    for i in range(n_sample):
+        order = []
+
+        # add other objects that are affected by the action
+        obj_mask = np.any(dataset.mask[i], axis=1)
+        effected_objs, = np.where(obj_mask)
+        if not shuffle_only_nonmask:
+            np.random.shuffle(effected_objs)
+        order.extend(effected_objs)
+
+        # add other objects that are not affected by the action
+        uneffected_objs, = np.where(np.logical_not(obj_mask))
+        np.random.shuffle(uneffected_objs)
+        order.extend(uneffected_objs)
+
+        for j, o_i in enumerate(order):
+            state[i, j] = dataset.state[i, o_i]
+            next_state[i, j] = dataset.next_state[i, o_i]
+            if mask_full_obj:
+                mask[i, j] = np.any(dataset.mask[i, o_i], axis=-1)
+            elif mask_pos_feats:
+                mask[i, j] = dataset.mask[i, o_i]
+                mask[i, j, -2:] = np.any(dataset.mask[i, o_i, -2:])
+            else:
+                mask[i, j] = dataset.mask[i, o_i]
+
+    if flatten:
+        state = state.reshape(n_sample, -1)
+        next_state = next_state.reshape(n_sample, -1)
+        mask = mask.reshape(n_sample, -1)
+
+    return S2SDataset(state, dataset.option, dataset.reward, next_state, mask)
