@@ -9,8 +9,4 @@ Welcome to skills-to-symbols's documentation!
    :maxdepth: 1
    :caption: Contents:
 
-   collect
-   partition
-   factorise
-   build_vocab
-   structs
+   modules
