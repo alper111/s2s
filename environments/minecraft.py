@@ -75,9 +75,10 @@ def yaml_blocks_to_xml_str(blocks):
     """
     xml_str = ""
     for b in blocks:
-        xml_str += f"""
-        <DrawBlock x=\"{b['position']['x']}\" y=\"{b['position']['y']}\" z=\"{b['position']['z']}\" type=\"{b['type']}\"/>
-        """
+        xml_str += f"""<DrawBlock x=\"{b['position']['x']}\""""
+        xml_str += f""" y=\"{b['position']['y']}\""""
+        xml_str += f""" z=\"{b['position']['z']}\""""
+        xml_str += f""" type=\"{b['type']}\"/>"""
     return xml_str
 
 
