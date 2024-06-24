@@ -6,10 +6,10 @@ from scipy.spatial.distance import cdist
 
 
 class MNISTSokoban(gym.Env):
-    metadata = {"render_modes": ["human", "rgb_array"], "render_fps": 20}
+    metadata = {"render_modes": ["human", "rgb_array"], "render_fps": 5}
 
-    def __init__(self, map_file: str = None, size: tuple[int, int] = None, max_crates: int = 5, max_steps=200,
-                 object_centric: bool = False, render_mode: str = None, rand_digits: bool = False,
+    def __init__(self, map_file: str = None, size: tuple[int, int] = None, object_centric: bool = False,
+                 max_crates: int = 5, max_steps=200, render_mode: str = None, rand_digits: bool = False,
                  rand_agent: bool = False, rand_x: bool = False):
         assert map_file is not None or size is not None, "Either map_file or size must be provided"
 
@@ -18,6 +18,7 @@ class MNISTSokoban(gym.Env):
         self._max_crates = max_crates
         self._max_steps = max_steps
         self.object_centric = object_centric
+        self.max_objects = max_crates*2 + 1
         self.render_mode = render_mode
         self.rand_digits = rand_digits
         self.rand_agent = rand_agent
@@ -39,11 +40,13 @@ class MNISTSokoban(gym.Env):
         self._labels = {i: np.where(_labels == i)[0] for i in range(10)}
 
         self.action_space = gym.spaces.Discrete(4)
+        self._feat_dim = 32*32
+        self._last_obs = None
+        self.reset()
 
-        # for object-centric representation
-        self._feat_dim = 1024
+    def reset(self, seed=None, options=None) -> tuple[np.ndarray, dict]:
+        super().reset(seed=seed)
 
-    def reset(self) -> tuple[np.ndarray, dict]:
         self._init_agent_mark()
         self._init_x_mark()
         self._init_digits()
@@ -54,7 +57,12 @@ class MNISTSokoban(gym.Env):
             self._map = self.generate_map(self._size, max_crates=self._max_crates)
         self._shape = (len(self._map), len(self._map[0]))
         shape = (self._shape[0]*32, self._shape[1]*32)
-        self.observation_space = gym.spaces.Box(low=0, high=255, shape=shape, dtype=np.uint8)
+        if self.object_centric:
+            self.observation_space = gym.spaces.Sequence(
+                gym.spaces.Box(low=0, high=max(self._shape)-1, shape=(32*32+2,), dtype=np.float32)
+            )
+        else:
+            self.observation_space = gym.spaces.Box(low=0, high=255, shape=shape, dtype=np.uint8)
 
         ax, ay = -1, -1
         for i in range(self._shape[0]):
@@ -65,6 +73,7 @@ class MNISTSokoban(gym.Env):
         self._agent_loc = np.array([ax, ay])
         self._t = 0
 
+        self._last_obs = None
         obs = self._get_obs()
         info = self._get_info()
 
@@ -154,93 +163,15 @@ class MNISTSokoban(gym.Env):
             self._digit_idx[i] = np.random.choice(self._labels[i])
 
     def _render_frame(self):
+        objects = self._render_tiles()
         canvas = pygame.Surface((self._shape[1]*32, self._shape[0]*32))
         canvas.fill((0, 0, 0))
-
-        for i in range(self._shape[0]):
-            for j in range(self._shape[1]):
-                bg, tile = self._map[i][j]
-                if bg == "0":
-                    if self.rand_digits:
-                        digit_idx = np.random.choice(self._labels[0])
-                    else:
-                        digit_idx = self._digit_idx[0]
-                    digit = self._data[digit_idx]
-                    digit = np.stack([digit]*3, axis=-1)
-                    digit = pygame.surfarray.make_surface(np.transpose(digit, (1, 0, 2)))
-                    bg_tile = pygame.transform.scale(digit, (32, 32))
-                else:
-                    bg_tile = pygame.Surface((32, 32))
-                    bg_tile.fill((0, 0, 0))
-                canvas.blit(bg_tile, (j*32, i*32))
-
-                if tile == "#":
-                    color = (80, 80, 80)
-                    rect = pygame.Rect(j*32, i*32, 32, 32)
-                    pygame.draw.rect(canvas, color, rect)
-                elif tile == "@":
-                    if self.rand_agent:
-                        self._init_agent_mark()
-                    color = (255, 255, 255)
-                    width = 4
-                    pygame.draw.line(canvas, color,
-                                     (j*32+self._a_corners[0], i*32+self._a_corners[1]),
-                                     (j*32+self._a_corners[2], i*32+self._a_corners[3]),
-                                     width)
-                    pygame.draw.line(canvas, color,
-                                     (j*32+self._a_corners[0], i*32+self._a_corners[1]),
-                                     (j*32+self._a_corners[4], i*32+self._a_corners[5]),
-                                     width)
-                    pygame.draw.line(canvas, color,
-                                     (j*32+self._a_corners[2], i*32+self._a_corners[3]),
-                                     (j*32+self._a_corners[4], i*32+self._a_corners[5]),
-                                     width)
-                    pygame.draw.circle(canvas, color,
-                                       (j*32+self._a_corners[0], i*32+self._a_corners[1]),
-                                       width//2)
-                    pygame.draw.circle(canvas, color,
-                                       (j*32+self._a_corners[2], i*32+self._a_corners[3]),
-                                       width//2)
-                    pygame.draw.circle(canvas, color,
-                                       (j*32+self._a_corners[4], i*32+self._a_corners[5]),
-                                       width//2)
-                elif tile != " ":
-                    digit = int(self._map[i][j][1])
-                    if self.rand_digits:
-                        digit_idx = np.random.choice(self._labels[digit])
-                    else:
-                        digit_idx = self._digit_idx[digit]
-                    digit = self._data[digit_idx]
-                    digit = np.stack([digit]*3, axis=-1)
-                    tile = pygame.surfarray.make_surface(np.transpose(digit, (1, 0, 2)))
-                    # scale the tile to 32x32
-                    tile = pygame.transform.scale(tile, (32, 32))
-                    canvas.blit(tile, (j*32, i*32))
-                    if bg == "0":
-                        if self.rand_x:
-                            self._init_x_mark()
-                        color = (255, 255, 255)
-                        width = 4
-                        pygame.draw.line(canvas, color,
-                                         (j*32+self._x_corners[0], i*32+self._x_corners[1]),
-                                         (j*32+self._x_corners[2], i*32+self._x_corners[3]),
-                                         width)
-                        pygame.draw.line(canvas, color,
-                                         (j*32+self._x_corners[4], i*32+self._x_corners[5]),
-                                         (j*32+self._x_corners[6], i*32+self._x_corners[7]),
-                                         width)
-                        pygame.draw.circle(canvas, color,
-                                           (j*32+self._x_corners[0], i*32+self._x_corners[1]),
-                                           width//2)
-                        pygame.draw.circle(canvas, color,
-                                           (j*32+self._x_corners[2], i*32+self._x_corners[3]),
-                                           width//2)
-                        pygame.draw.circle(canvas, color,
-                                           (j*32+self._x_corners[4], i*32+self._x_corners[5]),
-                                           width//2)
-                        pygame.draw.circle(canvas, color,
-                                           (j*32+self._x_corners[6], i*32+self._x_corners[7]),
-                                           width//2)
+        for obj in objects:
+            bg, fg, i, j = obj
+            if bg is not None:
+                canvas.blit(bg, (j*32, i*32))
+            if fg is not None:
+                canvas.blit(fg, (j*32, i*32))
 
         if self.render_mode == "human":
             if self._window is None:
@@ -255,10 +186,58 @@ class MNISTSokoban(gym.Env):
             pygame.event.pump()
             pygame.display.update()
             self._clock.tick(self.metadata["render_fps"])
-        return np.transpose(pygame.surfarray.array3d(canvas)[:, :, 0], (1, 0))
+
+        if self.object_centric:
+            entities = []
+            for obj in objects:
+                bg, fg, i, j = obj
+                if bg is not None:
+                    arr = np.transpose(pygame.surfarray.array3d(bg)[:, :, 0], (1, 0))
+                    entities.append((arr, i, j))
+                if fg is not None:
+                    arr = np.transpose(pygame.surfarray.array3d(fg)[:, :, 0], (1, 0))
+                    entities.append((arr, i, j))
+            return entities
+        else:
+            return np.transpose(pygame.surfarray.array3d(canvas)[:, :, 0], (1, 0))
+
+    def _render_tiles(self) -> list[tuple[pygame.Surface | None, pygame.Surface | None, int, int]]:
+        objects = []
+        for i in range(self._shape[0]):
+            for j in range(self._shape[1]):
+                bg_tile = None
+                fg_tile = None
+
+                bg, fg = self._map[i][j]
+                if bg == "0":
+                    bg_tile = self._draw_digit(0)
+
+                if fg == "#":
+                    color = (80, 80, 80)
+                    fg_tile = pygame.Surface((32, 32))
+                    fg_tile.fill(color)
+                elif fg == "@":
+                    fg_tile = self._draw_agent()
+                elif fg != " ":
+                    digit = int(self._map[i][j][1])
+                    fg_tile = self._draw_digit(digit)
+                    if bg == "0":
+                        cross = self._draw_cross()
+                        fg_tile.blit(cross, (0, 0))
+
+                objects.append((bg_tile, fg_tile, i, j))
+        return objects
 
     def _get_obs(self) -> np.ndarray:
-        return self._render_frame()
+        obs = self._render_frame()
+        obs = np.stack([np.concatenate([o_i[0].reshape(-1), [o_i[1]], [o_i[2]]], axis=-1) for o_i in obs])
+        if self.object_centric and self._last_obs is not None:
+            obs_imgs = np.stack([x[:-2] for x in obs])
+            last_obs_imgs = np.stack([x[:-2] for x in self._last_obs])
+            indices = self._match_indices(last_obs_imgs, obs_imgs)
+            obs = np.stack([obs[i] for i in indices])
+        self._last_obs = obs
+        return obs
 
     def _get_info(self) -> dict:
         return {"map": self._map}
@@ -275,13 +254,50 @@ class MNISTSokoban(gym.Env):
                         n_crossed += 1
         return n_crossed / n_total
 
-    def _match_indices(self, state, next_state):
+    def _draw_digit(self, digit: int) -> np.ndarray:
+        if self.rand_digits:
+            digit_idx = np.random.choice(self._labels[digit])
+        else:
+            digit_idx = self._digit_idx[digit]
+        digit = self._data[digit_idx]
+        digit = np.stack([digit]*3, axis=-1)
+        digit = pygame.surfarray.make_surface(np.transpose(digit, (1, 0, 2)))
+        digit = pygame.transform.scale(digit, (32, 32))
+        return digit
+
+    def _draw_cross(self) -> pygame.Surface:
+        if self.rand_x:
+            self._init_x_mark()
+        color = (255, 255, 255)
+        width = 4
+        return self._draw_lines([self._x_corners[:4], self._x_corners[4:]], color, width)
+
+    def _draw_agent(self) -> pygame.Surface:
+        if self.rand_agent:
+            self._init_agent_mark()
+        color = (255, 255, 255)
+        width = 4
+        return self._draw_lines([[self._a_corners[0], self._a_corners[1], self._a_corners[2], self._a_corners[3]],
+                                 [self._a_corners[0], self._a_corners[1], self._a_corners[4], self._a_corners[5]],
+                                 [self._a_corners[2], self._a_corners[3], self._a_corners[4], self._a_corners[5]]],
+                                color, width)
+
+    def _draw_lines(self, lines: list[list[int]], color: tuple[int, int, int], width: int) -> pygame.Surface:
+        canvas = pygame.Surface((32, 32))
+        for line in lines:
+            pygame.draw.line(canvas, color, line[:2], line[2:], width)
+            pygame.draw.circle(canvas, color, line[:2], width//2)
+            pygame.draw.circle(canvas, color, line[2:], width//2)
+        return canvas
+
+    def _match_indices(self, state, next_state) -> np.ndarray:
         # TODO
         # normally, we need to figure out which entity maps to which one
         # e.g., maybe with something like the Hungarian algorithm
         feat, _ = state[:, :self._feat_dim], state[:, self._feat_dim:]
         feat_n, _ = next_state[:, :self._feat_dim], next_state[:, self._feat_dim:]
-        indices = np.argmin(cdist(feat, feat_n), axis=-1)
+        dists = cdist(feat, feat_n)
+        indices = np.argmin(dists, axis=-1)
         return indices
 
     @property
