@@ -5,11 +5,11 @@ import argparse
 from gymnasium.wrappers.flatten_observation import FlattenObservation
 from gymnasium.wrappers.transform_observation import TransformObservation
 
-from environment import MNIST8Tile, ObjectCentricEnv
-from collect import collect
-from partition import partition_to_subgoal
-from factorise import factors_from_partitions, add_factors_to_partitions
-from build_vocab import build_vocabulary, build_schemata
+from environments.sokoban import MNISTSokoban
+from s2s.collect import collect
+from s2s.partition import partition_to_subgoal
+from s2s.factorise import factors_from_partitions, add_factors_to_partitions
+from s2s.vocabulary import build_vocabulary, build_schemata
 
 
 logging.basicConfig(level=logging.INFO,
@@ -20,11 +20,17 @@ logger = logging.getLogger("main")
 
 def main(n_samples: int, object_factored: bool):
     # initialize the environment
-    if object_factored:
-        env = ObjectCentricEnv(MNIST8Tile(random=True, max_steps=1))
-    else:
-        env = FlattenObservation(MNIST8Tile(random=False, max_steps=1))
+    # if object_factored:
+    #     env = ObjectCentricEnv(MNIST8Tile(random=True, max_steps=1))
+    # else:
+    #     env = FlattenObservation(MNIST8Tile(random=False, max_steps=1))
+    #     env = TransformObservation(env, lambda x: x / 255)
+    env = MNISTSokoban(size=(4, 4), max_crates=1, max_steps=10, object_centric=object_factored,
+                       rand_digits=False, rand_agent=False, rand_x=False, render_mode="rgb_array")
+    if not object_factored:
+        env = FlattenObservation(env)
         env = TransformObservation(env, lambda x: x / 255)
+    env.reset()
 
     # collect data
     logger.info("Collecting data...")
