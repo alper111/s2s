@@ -4,7 +4,7 @@ import gymnasium as gym
 import numpy as np
 
 from s2s.structs import S2SDataset
-from environment import ObjectCentricEnv
+from environments.sokoban import ObjectCentricEnv
 
 
 def collect(n: int, env: gym.Env | ObjectCentricEnv, options: dict[str, Callable] | None = None) -> S2SDataset:
