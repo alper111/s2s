@@ -68,7 +68,7 @@ def observe(env, x, y, z):
     return pixel_points
 
 
-def yaml_blocks_to_xml_str(blocks):
+def blocks_to_xml(blocks):
     """
     Original source: https://github.com/IretonLiu/mine-pddl
     Converts a list of blocks to an xml string
@@ -82,7 +82,7 @@ def yaml_blocks_to_xml_str(blocks):
     return xml_str
 
 
-def yaml_inventory_to_inventory_item(inventory):
+def inventory_to_items(inventory):
     """
     Original source: https://github.com/IretonLiu/mine-pddl
     Converts a list of inventory items to an inventory item list
