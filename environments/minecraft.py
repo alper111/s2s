@@ -2,18 +2,28 @@ import minedojo
 import numpy as np
 
 
-def look_at_block(env, x, y, z):
+def look_at_block(env, x, y, z, teleport_nearby=False, noisy=False):
     # get the center of the block
     ox, oy, oz = x+0.5, y+0.5, z+0.5
     agent_x, agent_y, agent_z = env.prev_obs['location_stats']['pos']
-    # add eye-height to y, which is 1 + 10/16
-    eye_y = agent_y + 1 + 10/16
-    print(f"Previous Pitch: {env.prev_obs['location_stats']['pitch']}, Yaw: {env.prev_obs['location_stats']['yaw']}")
-    dx, dy, dz = ox - agent_x, oy - eye_y, oz - agent_z
+    if teleport_nearby:
+        radius = np.random.uniform(2, 2.5)  # teleport within 1 to 1.5 blocks
+        theta = np.radians(np.random.uniform(0, 360))
+        x_t = ox + radius * np.cos(theta)
+        y_t = oy - 0.5
+        z_t = oz + radius * np.sin(theta)
+    else:
+        x_t, y_t, z_t = agent_x, agent_y, agent_z
+
+    eye_y = y_t + 1 + 10/16
+    dx, dy, dz = ox - x_t, oy - eye_y, oz - z_t
     yaw = np.degrees(np.arctan2(-dx, dz))
     pitch = np.degrees(np.arctan2(-dy, np.sqrt(dx**2 + dz**2)))
-    print(f"Looking at {x}, {y}, {z} with yaw {yaw} and pitch {pitch}")
-    env.teleport_agent(agent_x, agent_y, agent_z, yaw, pitch)
+    if noisy:
+        yaw += np.random.normal(0, 5)
+        pitch += np.random.normal(0, 5)
+
+    env.teleport_agent(x_t, y_t, z_t, yaw, pitch)
     for _ in range(5):
         obs, _, _, _ = env.step(env.action_space.no_op())
     return obs
