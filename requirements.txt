@@ -1,0 +1,7 @@
+numpy==1.26.4
+minedojo @ git+https://github.com/alper111/MineDojo
+pygame
+scipy
+torchvision
+scikit-learn
+pyyaml
