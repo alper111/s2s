@@ -1,4 +1,5 @@
 from itertools import chain, combinations
+from typing import Union
 import logging
 
 import numpy as np
@@ -41,6 +42,9 @@ def build_vocabulary(partitions: dict[tuple[int, int], S2SDataset], factors: lis
     vocabulary = UniquePredicateList(_overlapping_dists)
     pre_props = {}
     eff_props = {}
+
+    # first add the factors to the partitions (mutates partitions!)
+    add_factors_to_partitions(partitions, factors, threshold=0.9)
 
     for key in partitions:
         partition_k = partitions[key]
@@ -97,8 +101,8 @@ def build_vocabulary(partitions: dict[tuple[int, int], S2SDataset], factors: lis
 
 
 def build_schemata(vocabulary: UniquePredicateList,
-                   pre_props: dict[tuple[int, int], list[Proposition] | list[list[Proposition]]],
-                   eff_props: dict[tuple[int, int], list[Proposition] | list[list[Proposition]]]) \
+                   pre_props: dict[tuple[int, int], Union[list[Proposition], list[list[Proposition]]]],
+                   eff_props: dict[tuple[int, int], Union[list[Proposition], list[list[Proposition]]]]) \
                     -> list[ActionSchema]:
     """
     Build the action schemata from the given preconditions and effects.
@@ -190,7 +194,7 @@ def create_action_schema(action_schema: ActionSchema, vocabulary: UniquePredicat
 
 
 def create_effect_clause(vocabulary: UniquePredicateList, partition: S2SDataset) \
-        -> list[KernelDensityEstimator] | list[list[KernelDensityEstimator]]:
+        -> Union[list[KernelDensityEstimator], list[list[KernelDensityEstimator]]]:
     """
     Create the effect clause for the given partition.
 
@@ -227,8 +231,51 @@ def create_effect_clause(vocabulary: UniquePredicateList, partition: S2SDataset)
     return vocabulary, effect_clause
 
 
+def add_factors_to_partitions(partitions: dict[tuple[int, int], S2SDataset], factors: list[Factor],
+                              threshold: float = 0.9) -> None:
+    """
+    Add factors to the partitions. Mutates the partitions in place.
+
+    Parameters
+    ----------
+    partitions : dict[tuple[int, int], S2SDataset]
+        Subgoal partitions.
+    factors : list[Factor]
+        Factors that represent the state space.
+    threshold : float
+        Minimum proportion of samples that must be modified
+        for a factor to be considered as modified by the partition.
+
+    Returns
+    -------
+    None
+    """
+    partition_keys = list(partitions.keys())
+    for p_i in partition_keys:
+        partition = partitions[p_i]
+
+        if partition.is_object_factored:
+            partition.factors = [[] for _ in range(partition.n_objects)]
+        else:
+            partition.factors = []
+
+        for factor in factors:
+            factor_mask = partition.mask[..., factor.variables].mean(axis=0)
+            # By construction, if any of the variables is higher than the threshold,
+            # then all of them should be higher. But if factors are provided from
+            # some other procedure, then this might not be the case. Therefore,
+            # check if any of the variables are modified enough.
+            if partition.is_object_factored:
+                for obj_i in range(partition.n_objects):
+                    if (factor_mask[obj_i] > threshold).any():
+                        partition.factors[obj_i].append(factor)
+            else:
+                if (factor_mask > threshold).any():
+                    partition.factors.append(factor)
+
+
 def _compute_preconditions(x: np.ndarray, y: np.ndarray, vocabulary: UniquePredicateList) \
-        -> list[Proposition] | list[list[Proposition]]:
+        -> Union[list[Proposition], list[list[Proposition]]]:
     """
     Compute the preconditions from the given data.
 

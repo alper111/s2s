@@ -2,13 +2,15 @@ import logging
 import pickle
 import argparse
 
-from gymnasium.wrappers.flatten_observation import FlattenObservation
-from gymnasium.wrappers.transform_observation import TransformObservation
+import gym
+from gym.wrappers import FlattenObservation
+import yaml
 
+from environments.minecraft import Minecraft
 from environments.sokoban import MNISTSokoban
-from s2s.collect import collect
+from environments.collect import collect
 from s2s.partition import partition_to_subgoal
-from s2s.factorise import factors_from_partitions, add_factors_to_partitions
+from s2s.factorise import factors_from_partitions
 from s2s.vocabulary import build_vocabulary, build_schemata
 
 
@@ -18,24 +20,23 @@ logging.basicConfig(level=logging.INFO,
 logger = logging.getLogger("main")
 
 
-def main(n_samples: int, object_factored: bool):
-    # initialize the environment
-    # if object_factored:
-    #     env = ObjectCentricEnv(MNIST8Tile(random=True, max_steps=1))
-    # else:
-    #     env = FlattenObservation(MNIST8Tile(random=False, max_steps=1))
-    #     env = TransformObservation(env, lambda x: x / 255)
-    env = MNISTSokoban(size=(4, 4), max_crates=1, max_steps=10, object_centric=object_factored,
-                       rand_digits=False, rand_agent=False, rand_x=False, render_mode="rgb_array")
-    if not object_factored:
-        env = FlattenObservation(env)
-        env = TransformObservation(env, lambda x: x / 255)
+def main(env: gym.Env, n_samples: int, object_factored: bool):
+    if env == "sokoban":
+        env = MNISTSokoban(size=(4, 4), max_crates=1, max_steps=10, object_centric=object_factored,
+                           rand_digits=False, rand_agent=False, rand_x=False, render_mode="rgb_array")
+        if not object_factored:
+            env = FlattenObservation(env)
+    elif env == "minecraft":
+        world_config = yaml.safe_load(open("data/Build_Wall_Easy.yaml", "r"))
+        env = Minecraft(world_config)
     env.reset()
 
     # collect data
     logger.info("Collecting data...")
     dataset = collect(n_samples, env, None)
     logger.info("Data collected.")
+    with open("dataset.pkl", "wb") as f:
+        pickle.dump(dataset, f)
 
     # partition the data s.t. subgoal property is satisfied
     logger.info("Partitioning data...")
@@ -47,8 +48,6 @@ def main(n_samples: int, object_factored: bool):
     # learn factors
     logger.info("Learning factors...")
     factors = factors_from_partitions(partitions, threshold=0.9)
-    add_factors_to_partitions(partitions, factors, threshold=0.9)
-
     with open("factors.pkl", "wb") as f:
         pickle.dump(factors, f)
     logger.info(f"Number of factors={len(factors)}.")
@@ -76,7 +75,8 @@ def main(n_samples: int, object_factored: bool):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
+    parser.add_argument("--env", type=str)
     parser.add_argument("--n_samples", type=int, default=5000)
     parser.add_argument("--object_factored", action="store_true")
     args = parser.parse_args()
-    main(args.n_samples, args.object_factored)
+    main(args.env, args.n_samples, args.object_factored)

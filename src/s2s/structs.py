@@ -1,5 +1,5 @@
 import logging
-from typing import Callable
+from typing import Callable, Optional, Union
 from collections import defaultdict
 import copy
 
@@ -138,7 +138,7 @@ class KernelDensityEstimator:
         None
         """
         self._factors = factors
-        self._kde: KernelDensity | None = None
+        self._kde: Optional[KernelDensity] = None
 
     def fit(self, X: np.ndarray, **kwargs) -> None:
         """
@@ -241,7 +241,7 @@ class Proposition:
     A predicate over one or more factors.
     """
 
-    def __init__(self, idx: int, name: str, kde: KernelDensityEstimator | None):
+    def __init__(self, idx: int, name: str, kde: Optional[KernelDensityEstimator]):
         """
         Create a new predicate.
 
@@ -264,7 +264,7 @@ class Proposition:
         self.sign = 1  # whether true or the negation of the predicate
 
     @property
-    def estimator(self) -> KernelDensityEstimator | None:
+    def estimator(self) -> Optional[KernelDensityEstimator]:
         return self._kde
 
     @property
@@ -330,7 +330,7 @@ class UniquePredicateList:
     with duplicates.
     """
 
-    def __init__(self, comparator: Callable[[KernelDensityEstimator, KernelDensityEstimator], bool] | None = None):
+    def __init__(self, comparator: Optional[Callable[[KernelDensityEstimator, KernelDensityEstimator], bool]] = None):
         """
         Create a list data structure that ensures no duplicates are added to the list.
 
@@ -341,7 +341,7 @@ class UniquePredicateList:
         """
         self._comparator = comparator if comparator is not None else lambda x, y: x is y
         self._list = []
-        self._projections: list[dict[int, int | None]] = []
+        self._projections: list[dict[int, Optional[int]]] = []
         self.mutex_groups = None
         self.factors = None
         self.__idx = 0
@@ -537,7 +537,7 @@ class UniquePredicateList:
                 return i
         return -1
 
-    def __getitem__(self, item: int | slice | list | tuple) -> Proposition | list[Proposition]:
+    def __getitem__(self, item: Union[int, slice, list, tuple]) -> Union[Proposition, list[Proposition]]:
         if isinstance(item, int):
             return self._list[item]
         elif isinstance(item, slice):
@@ -701,7 +701,7 @@ class ActionSchema:
         return schema
 
 
-def _proposition_to_str(proposition: Proposition | list[Proposition], name: str = None) -> str:
+def _proposition_to_str(proposition: Union[Proposition, list[Proposition]], name: str = None) -> str:
     if isinstance(proposition, Proposition):
         prop = proposition.name
         if name is not None:
