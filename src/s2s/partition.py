@@ -1,4 +1,5 @@
 from collections import defaultdict
+from typing import Optional
 import logging
 
 import numpy as np
@@ -128,7 +129,7 @@ def _partition(x: np.ndarray) -> dict[int, list]:
     return partitions, centroids
 
 
-def _k_means(x: np.ndarray, k: int, centroids: np.ndarray | None = None) -> tuple[np.ndarray, np.ndarray, float]:
+def _k_means(x: np.ndarray, k: int, centroids: Optional[np.ndarray] = None) -> tuple[np.ndarray, np.ndarray, float]:
     """
     Perform k-means clustering.
 

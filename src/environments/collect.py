@@ -1,13 +1,12 @@
-from typing import Callable
+from typing import Callable, Optional
 
-import gymnasium as gym
 import numpy as np
+import gym
 
 from s2s.structs import S2SDataset
-from environments.sokoban import ObjectCentricEnv
 
 
-def collect(n: int, env: gym.Env | ObjectCentricEnv, options: dict[str, Callable] | None = None) -> S2SDataset:
+def collect(n: int, env: gym.Env, options: Optional[dict[str, Callable]] = None) -> S2SDataset:
     """
     Collects n samples from the environment.
 
@@ -15,9 +14,9 @@ def collect(n: int, env: gym.Env | ObjectCentricEnv, options: dict[str, Callable
     ----------
     n: int
         Number of samples to collect.
-    env: gym.Env | ObjectCentricEnv
+    env: BaseEnv
         Environment to collect samples from.
-    options: dict[str, Callable] | None
+    options: dict[str, Callable], default=None
         Options to execute in the environment.
 
     Returns
@@ -25,15 +24,9 @@ def collect(n: int, env: gym.Env | ObjectCentricEnv, options: dict[str, Callable
     S2SDataset
         Dataset of <state, action, reward, next_state, mask> tuples.
     """
-    if isinstance(env.observation_space, gym.spaces.Box):
-        obj_centric = False
-        obs_shape = (n,) + env.observation_space.shape
-        act_shape = (n,)
-    elif isinstance(env.observation_space, gym.spaces.Sequence):
-        assert isinstance(env.observation_space.feature_space, gym.spaces.Box)
-        obj_centric = True
-        obs_shape = (n, env.max_objects) + env.observation_space.feature_space.shape
-        act_shape = (n,)
+
+    obs_shape = (n,) + env.observation_space.shape
+    act_shape = (n,) + env.action_space.shape
 
     state_arr = np.zeros(obs_shape, dtype=np.float32)
     action_arr = np.zeros(act_shape, dtype=int)
@@ -43,23 +36,20 @@ def collect(n: int, env: gym.Env | ObjectCentricEnv, options: dict[str, Callable
 
     i = 0
     while i < n:
-        state, _ = env.reset()
+        state = env.reset()
         done = False
 
         while not done and i < n:
             if options is None:
-                action = env.action_space.sample()
+                action = env.sample_action()
             else:
                 # TODO:
                 # select a random option o with I_o > 0
                 # execute it in a loop till it terminates
-                pass
-            if obj_centric:
-                next_state, reward, term, trun, _ = env.step(action)
-                # action = np.array([action, info["acted_object"]])
-            else:
-                next_state, reward, term, trun, _ = env.step(action)
-            opt_mask = state != next_state
+                raise NotImplementedError
+
+            next_state, reward, done, _ = env.step(action)
+            opt_mask = env.get_delta_mask(state, next_state)
 
             state_arr[i] = state
             action_arr[i] = action
@@ -67,7 +57,6 @@ def collect(n: int, env: gym.Env | ObjectCentricEnv, options: dict[str, Callable
             next_state_arr[i] = next_state
             mask_arr[i] = opt_mask
 
-            done = term or trun
             state = next_state
             i += 1
 
