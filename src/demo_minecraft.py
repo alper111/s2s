@@ -3,12 +3,12 @@ from copy import deepcopy
 import yaml
 import numpy as np
 
-from environments.minecraft import MinecraftEnv
+from environments.minecraft import Minecraft
 
 
 if __name__ == "__main__":
     world_config = yaml.safe_load(open("data/Build_Wall_Easy.yaml", "r"))
-    env = MinecraftEnv(world_config)
+    env = Minecraft(world_config)
 
     n_obj = len(world_config['blocks'])
     state = []
