@@ -1,5 +1,5 @@
 numpy==1.26.4
-minedojo @ git+https://github.com/alper111/MineDojo
+minedojo @ git+https://github.com/alper111/MineDojo@unlimited-power
 pygame
 scipy
 torchvision
