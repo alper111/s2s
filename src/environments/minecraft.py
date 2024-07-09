@@ -68,7 +68,7 @@ class Minecraft(gym.Env):
                 north_exists = self._block_exists(x, y, z-1)
                 top_exists = self._block_exists(x, y+1, z)
                 neighbors = np.array([east_exists, south_exists, west_exists, north_exists, top_exists], dtype=float)
-                obs[key] = np.concatenate([img.reshape(-1) / 255.0, neighbors])
+                obs[key] = np.concatenate([img, neighbors])
         return obs
 
     @property
