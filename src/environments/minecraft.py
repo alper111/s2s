@@ -189,7 +189,7 @@ class Minecraft(gym.Env):
 
     def _step(self, action):
         obs, _, _, _ = self._env.step(action)
-        for _ in range(2):
+        for _ in range(5):
             obs, _, _, _ = self._env.step(self.NO_OP())
         self._prev_obs = obs
 
