@@ -6,8 +6,8 @@ import numpy as np
 from scipy import stats
 from scipy.spatial.distance import cdist
 
-from s2s.structs import (KernelDensityEstimator, UniquePredicateList, Factor,
-                         Proposition, ActionSchema, S2SDataset)
+from s2s.structs import (KernelDensityEstimator, KNNDensityEstimator, UniquePredicateList,
+                         Factor, Proposition, ActionSchema, S2SDataset)
 
 __author__ = 'Steve James and George Konidaris'
 # Modified by Alper Ahmetoglu. Original source:
@@ -39,7 +39,8 @@ def build_vocabulary(partitions: dict[tuple[int, int], S2SDataset], factors: lis
         eff_props : dict[tuple[int, int], list[Proposition]]
             The effects for each partition.
     """
-    vocabulary = UniquePredicateList(_overlapping_dists)
+    # vocabulary = UniquePredicateList(_overlapping_dists)
+    vocabulary = UniquePredicateList(_knn_overlapping, density_type="knn")
     pre_props = {}
     eff_props = {}
 
@@ -82,18 +83,38 @@ def build_vocabulary(partitions: dict[tuple[int, int], S2SDataset], factors: lis
     for key in partitions:
         x_pos = partitions[key].state
         n = len(x_pos)
-        x_neg = []
+        # x_neg = []
         other_options = [o for o in partitions if o != key]
-        for _ in range(n):
-            j = np.random.randint(len(other_options))
-            o_ = other_options[j]
-            ds_neg = partitions[o_]
-            sample_neg = ds_neg.state[np.random.randint(len(ds_neg.state))]
-            x_neg.append(sample_neg)
-        x_neg = np.array(x_neg)
-        x = np.concatenate([x_pos, x_neg])
-        y = np.concatenate([np.ones(n), np.zeros(n)])
-        pre = _compute_preconditions(x, y, vocabulary)
+        pre_count = {}
+        for _ in range(10):
+            x_neg = []
+            for _ in range(n):
+                j = np.random.randint(len(other_options))
+                o_ = other_options[j]
+                ds_neg = partitions[o_]
+                sample_neg = ds_neg.state[np.random.randint(len(ds_neg.state))]
+                x_neg.append(sample_neg)
+            x_neg = np.array(x_neg)
+            x = np.concatenate([x_pos, x_neg])
+            y = np.concatenate([np.ones(n), np.zeros(n)])
+            pre = _compute_preconditions(x, y, vocabulary, delta=1e-8)
+            # TODO: this is specific to object-centric case.
+            # Create a type for lifted predicates, and get rid of this
+            # if else kind of thing.
+            for obj_j, prop in enumerate(pre):
+                if obj_j not in pre_count:
+                    pre_count[obj_j] = {}
+                for p_i in prop:
+                    if p_i not in pre_count[obj_j]:
+                        pre_count[obj_j][p_i] = 0
+                    pre_count[obj_j][p_i] += 1
+        pre = []
+        for obj_j in sorted(pre_count):
+            pre.append([])
+            for prop in pre_count[obj_j]:
+                if pre_count[obj_j][prop] > 5:
+                    pre[obj_j].append(prop)
+
         pre_props[key] = pre
         n_pred = len(pre) if not partitions[key].is_object_factored else sum([len(x) for x in pre])
         logger.info(f"Processed Pre({key[0]}-{key[1]}); {n_pred} predicates found.")
@@ -128,7 +149,7 @@ def build_schemata(vocabulary: UniquePredicateList,
         if len(eff) == 0:
             continue
         object_factored = True if isinstance(eff[0], list) else False
-        action_schema = ActionSchema(f"p{key[0]}_{key[1]}")
+        action_schema = ActionSchema(f"a_{key[0]}_{key[1]}")
         if object_factored:
             for j in range(len(pre)):
                 if len(eff) == 0:
@@ -530,7 +551,17 @@ def _overlapping_dists(x: KernelDensityEstimator, y: KernelDensityEstimator) -> 
     return True
 
 
-def _knn_accuracy(x: np.ndarray, y: np.ndarray, k: int = 5) -> tuple[float, float]:
+def _knn_overlapping(x: KNNDensityEstimator, y: KNNDensityEstimator, k: int = 5, threshold=0.1) -> bool:
+    if set(x.factors) != set(y.factors):
+        return False
+    x_acc, y_acc = _knn_accuracy(x._samples, y._samples, k)
+    x_diff = abs(x_acc - 0.5)
+    y_diff = abs(y_acc - 0.5)
+    diff = (x_diff + y_diff) / 2
+    return diff < threshold
+
+
+def _knn_accuracy(x: np.ndarray, y: np.ndarray, k: int = 5, max_samples: int = 100) -> tuple[float, float]:
     """
     Compute classifier 2-sample test with k-NN.
 
@@ -550,9 +581,12 @@ def _knn_accuracy(x: np.ndarray, y: np.ndarray, k: int = 5) -> tuple[float, floa
         y_acc : float
             The accuracy of the classifier on the second dataset.
     """
-    n_sample = x.shape[0]
-    x = x.reshape(n_sample, -1)
-    y = y.reshape(n_sample, -1)
+    n_sample = min(x.shape[0], y.shape[0], max_samples)
+    x_idx = np.random.choice(x.shape[0], n_sample, replace=False)
+    y_idx = np.random.choice(y.shape[0], n_sample, replace=False)
+    # add noise to avoid ties
+    x = x[x_idx].reshape(n_sample, -1) + 1e-6 * np.random.randn(n_sample, x.shape[1])
+    y = y[y_idx].reshape(n_sample, -1) + 1e-6 * np.random.randn(n_sample, y.shape[1])
     xy = np.concatenate([x, y], axis=0)
     dists = cdist(xy, xy) + np.eye(2*n_sample) * 1e12
     indexes = np.argsort(dists, axis=1)[:, :k]
