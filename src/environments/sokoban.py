@@ -1,4 +1,5 @@
 from typing import Optional
+import os
 
 import gym.spaces
 import numpy as np
@@ -6,7 +7,6 @@ import torchvision
 import gym
 import pygame
 from scipy.spatial.distance import cdist
-import os
 
 
 class MNISTSokoban(gym.Env):
@@ -75,6 +75,7 @@ class MNISTSokoban(gym.Env):
         self._init_agent_mark()
         self._init_x_mark()
         self._init_digits()
+        self._last_obs = None
 
         if self._map_file is not None:
             self._map = self.read_map(self._map_file)
@@ -151,7 +152,7 @@ class MNISTSokoban(gym.Env):
 
         return obs, reward, done, info
 
-    def sample_action(self) -> np.ndarray:
+    def sample_action(self) -> int:
         return np.random.randint(0, 4)
 
     def render(self):
@@ -265,9 +266,9 @@ class MNISTSokoban(gym.Env):
         obs = self._render_frame()
         if self.object_centric:
             if self._last_obs is not None:
-                obs_imgs = np.stack([x[:-2] for x in obs])
-                last_obs_imgs = np.stack([x[:-2] for x in self._last_obs])
-                indices = self._match_indices(last_obs_imgs, obs_imgs)
+                # obs_imgs = np.stack([x[:-2] for x in obs])
+                # last_obs_imgs = np.stack([x[:-2] for x in self._last_obs])
+                indices = self._match_indices(self._last_obs, obs)
                 obs = np.stack([obs[i] for i in indices])
         return obs
 
