@@ -295,8 +295,8 @@ def add_factors_to_partitions(partitions: dict[tuple[int, int], S2SDataset], fac
                     partition.factors.append(factor)
 
 
-def _compute_preconditions(x: np.ndarray, y: np.ndarray, vocabulary: UniquePredicateList) \
-        -> Union[list[Proposition], list[list[Proposition]]]:
+def _compute_preconditions(x: np.ndarray, y: np.ndarray, vocabulary: UniquePredicateList,
+                           delta: float = 0.01) -> Union[list[Proposition], list[list[Proposition]]]:
     """
     Compute the preconditions from the given data.
 
@@ -308,6 +308,8 @@ def _compute_preconditions(x: np.ndarray, y: np.ndarray, vocabulary: UniquePredi
             The labels.
         vocabulary : UniquePredicateList
             The vocabulary of propositions.
+        delta : float
+            The threshold for the factor selection.
 
     Returns
     -------
@@ -330,25 +332,35 @@ def _compute_preconditions(x: np.ndarray, y: np.ndarray, vocabulary: UniquePredi
     else:
         preds = []
 
+    current_mask = np.ones(n, dtype=bool)
+    last_score = 0.5
     if object_factored:
         for j in range(symbol_indices.shape[1]):
             for f_i in range(symbol_indices.shape[2]):
                 sym = int(mode[j, f_i])
                 mask = symbol_indices[:, j, f_i] == sym
-                if np.mean(y[mask] == 1) > 0.7:
-                    factor = vocabulary.factors[f_i]
-                    group = vocabulary.mutex_groups[factor]
-                    prop = vocabulary[group[sym]]
+                mask = mask & current_mask
+                if not np.any(mask):
+                    continue
+                score = np.mean(y[mask] == 1)
+                if score > (last_score + delta):
+                    prop = vocabulary.get_by_index(f_i, sym)
                     preds[j].append(prop)
+                    current_mask = mask
+                    last_score = score
     else:
         for f_i in range(symbol_indices.shape[1]):
             sym = int(mode[f_i])
             mask = symbol_indices[:, f_i] == sym
-            if np.mean(y[mask] == 1) > 0.7:
-                factor = vocabulary.factors[f_i]
-                group = vocabulary.mutex_groups[factor]
-                prop = vocabulary[group[sym]]
+            mask = mask & current_mask
+            if not np.any(mask):
+                continue
+            score = np.mean(y[mask] == 1)
+            if score > (last_score + delta):
+                prop = vocabulary.get_by_index(f_i, sym)
                 preds.append(prop)
+                current_mask = mask
+                last_score = score
     return preds
 
 
