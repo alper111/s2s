@@ -6,6 +6,7 @@ import copy
 import numpy as np
 from sklearn.model_selection import GridSearchCV
 from sklearn.neighbors import KernelDensity
+from scipy.spatial.distance import cdist
 
 
 __author__ = 'Steve James and George Konidaris'
@@ -166,6 +167,22 @@ class KernelDensityEstimator:
         # logger.debug("Best bandwidth hyperparameter: {}".format(grid.best_params_['bandwidth']))
         self._kde = grid.best_estimator_
 
+    def score_samples(self, X: np.ndarray) -> np.ndarray:
+        """
+        Compute the log-likelihood of the samples.
+
+        Parameters
+        ----------
+        X : np.ndarray
+            The samples.
+
+        Returns
+        -------
+        log_prob : np.ndarray
+            The log-likelihood of the samples.
+        """
+        return self._kde.score_samples(X)
+
     @property
     def factors(self) -> list[Factor]:
         return self._factors
@@ -236,6 +253,143 @@ class KernelDensityEstimator:
         return kde
 
 
+class KNNDensityEstimator:
+    """
+    A density estimator that models a distribution over a factor (a set of low-level states)
+    with a k-nearest neighbors approach.
+    """
+
+    def __init__(self, factors: list[Factor]):
+        """
+        Initialize a new estimator.
+
+        Parameters
+        ----------
+        factors : list[Factor]
+            The factors that the estimator models.
+
+        Returns
+        -------
+        None
+        """
+        self._factors = factors
+        self._samples: Optional[np.ndarray] = None
+        self._k = 5
+
+    def fit(self, X: np.ndarray, **kwargs) -> None:
+        """
+        Fit the data to the effect estimator.
+
+        Parameters
+        ----------
+        X : np.ndarray
+            The data.
+        **kwargs : dict
+            Additional keyword arguments.
+
+        Returns
+        -------
+        None
+        """
+        if kwargs.get("masked", False):
+            self._samples = X
+        else:
+            self._samples = X[:, self.variables]
+
+    def score_samples(self, X: np.ndarray, max_samples_used: int = 100) -> np.ndarray:
+        """
+        Compute the log-likelihood of the samples.
+
+        Parameters
+        ----------
+        X : np.ndarray
+            The samples.
+
+        Returns
+        -------
+        log_prob : np.ndarray
+            The log-likelihood of the samples.
+        """
+        if X.ndim == 1:
+            X = np.reshape(X, (1, -1))
+        max_samples_used = min(max_samples_used, self._samples.shape[0])
+        idx = np.random.choice(self._samples.shape[0], max_samples_used, replace=False)
+        dists = cdist(X, self._samples[idx])
+        knn_dists = np.sort(dists, axis=1)[:, :self._k]
+        log_prob = -np.mean(knn_dists, axis=1)
+        return log_prob
+
+    @property
+    def factors(self) -> list[Factor]:
+        return self._factors
+
+    @property
+    def variables(self) -> list[int]:
+        variables = []
+        for f in self.factors:
+            variables.extend(f.variables)
+        return variables
+
+    @property
+    def factor_indices(self) -> dict[Factor, int]:
+        indices = {}
+        it = 0
+        for f in self.factors:
+            n_vars = len(f.variables)
+            rng = list(range(it, n_vars))
+            indices[f] = rng
+            it += len(f)
+        return indices
+
+    def sample(self, n_samples=100) -> np.ndarray:
+        """
+        Sample data from the density estimator.
+
+        Parameters
+        ----------
+        n_samples : int, optional
+            The number of samples to generate. Default is 100.
+
+        Returns
+        -------
+        data : np.ndarray
+            An array of size [n_samples, len(mask)] containing the sampled data.
+        """
+        assert isinstance(self._samples, np.ndarray), "Estimator not trained yet"
+        idx = np.random.choice(self._samples.shape[0], n_samples, replace=True)
+        data = self._samples[idx]
+        if data.ndim == 1:  # ensure always shape of (N X D)
+            data = np.reshape(data, (data.shape[0], 1))
+        return data
+
+    # def integrate_out(self, factor_list: list[Factor], **kwargs) -> 'KernelDensityEstimator':
+    #     """
+    #     Integrate out the given factors from the distribution.
+
+    #     Parameters
+    #     ----------
+    #     factor_list : list[Factor]
+    #         A list of factors to be marginalized out from the distribution.
+
+    #     Returns
+    #     -------
+    #     KernelDensityEstimator
+    #         A new distribution equal to the original distribution with the specified factors marginalized out.
+    #     """
+    #     rem_factors = []
+    #     rem_factor_indices = []
+    #     for f in self.factors:
+    #         if f not in factor_list:
+    #             rem_factors.append(f)
+    #             rem_factor_indices.extend(self.factor_indices[f])
+    #     n_samples = kwargs.get('estimator_samples', 100)
+    #     new_samples = self.sample(n_samples)[:, rem_factor_indices]
+    #     kde = KernelDensityEstimator(factors=rem_factors)
+    #     kwargs['masked'] = True  # the data has already been masked
+    #     kde.fit(new_samples, **kwargs)
+    #     return kde
+
+
 class Proposition:
     """
     A predicate over one or more factors.
@@ -277,16 +431,16 @@ class Proposition:
 
     @property
     def factors(self) -> list[Factor]:
-        assert isinstance(self._kde, KernelDensityEstimator)
+        # assert isinstance(self._kde, KernelDensityEstimator)
         return self._kde.factors
 
     @property
     def variables(self) -> list[int]:
-        assert isinstance(self._kde, KernelDensityEstimator)
+        # assert isinstance(self._kde, KernelDensityEstimator)
         return self._kde.variables
 
     def sample(self, n_samples) -> np.ndarray:
-        assert isinstance(self._kde, KernelDensityEstimator)
+        # assert isinstance(self._kde, KernelDensityEstimator)
         return self._kde.sample(n_samples)
 
     def is_grounded(self) -> bool:
@@ -330,7 +484,8 @@ class UniquePredicateList:
     with duplicates.
     """
 
-    def __init__(self, comparator: Optional[Callable[[KernelDensityEstimator, KernelDensityEstimator], bool]] = None):
+    def __init__(self, comparator: Optional[Callable[[KernelDensityEstimator, KernelDensityEstimator], bool]] = None,
+                 density_type="knn"):
         """
         Create a list data structure that ensures no duplicates are added to the list.
 
@@ -340,11 +495,16 @@ class UniquePredicateList:
             A function that accepts two objects and returns whether they are equal.
         """
         self._comparator = comparator if comparator is not None else lambda x, y: x is y
+        self._density_type = density_type
         self._list = []
         self._projections: list[dict[int, Optional[int]]] = []
         self.mutex_groups = None
         self.factors = None
         self.__idx = 0
+
+    @property
+    def density_type(self):
+        return self._density_type
 
     def append(self, data: np.ndarray, factors: list[Factor]) -> Proposition:
         """
@@ -363,7 +523,10 @@ class UniquePredicateList:
         base_predicate : Proposition
             The newly created predicate for the given set of factors.
         """
-        item = KernelDensityEstimator(factors)
+        if self._density_type == "kde":
+            item = KernelDensityEstimator(factors)
+        elif self._density_type == "knn":
+            item = KNNDensityEstimator(factors)
         item.fit(data)
 
         # add all possible projections here.
@@ -377,6 +540,10 @@ class UniquePredicateList:
             idx = self._get_or_none(estimator)
             if idx != -1:
                 predicate = self._list[idx]
+                if self.density_type == "knn":
+                    # add new samples to the existing estimator
+                    new_set = np.concatenate((predicate.estimator._samples, estimator._samples), axis=0)
+                    predicate.estimator.fit(new_set, masked=True)
             else:
                 # create a new predicate for this estimator and add it to the vocabulary
                 idx = len(self._list)
@@ -387,7 +554,10 @@ class UniquePredicateList:
                 if not predicate.is_independent():
                     for f in predicate.factors:
                         rem_factors = [fac for fac in predicate.factors if fac != f]
-                        child_item = KernelDensityEstimator(rem_factors)
+                        if self._density_type == "kde":
+                            child_item = KernelDensityEstimator(rem_factors)
+                        elif self._density_type == "knn":
+                            child_item = KNNDensityEstimator(rem_factors)
                         child_item.fit(data)
                         add_queue.append((child_item, f, idx))
 
@@ -499,7 +669,7 @@ class UniquePredicateList:
 
             for p_i, idx in enumerate(group):
                 prop = self._list[idx]
-                s = prop.estimator._kde.score_samples(masked_obs)
+                s = prop.estimator.score_samples(masked_obs)
                 if object_factored:
                     s = s.reshape(n_sample, n_obj)
                 scores[..., p_i] = s
@@ -530,6 +700,11 @@ class UniquePredicateList:
             # add empty list if there are no predicates for this factor
             if len(self.mutex_groups[factor]) == 0:
                 self.mutex_groups[factor] = []
+
+    def get_by_index(self, factor_index: int, symbol_index: int) -> Proposition:
+        factor = self.factors[factor_index]
+        group = self.mutex_groups[factor]
+        return self[group[symbol_index]]
 
     def _get_or_none(self, item) -> int:
         for i, x in enumerate(self._list):
@@ -918,7 +1093,7 @@ def sort_dataset(dataset: S2SDataset, mask_full_obj: bool = False,
         The dataset to be converted.
     mask_full_obj : bool, optional
         Whether to mask the full object or just the effected part of the object.
-    mask_nav_feats : bool, optional
+    mask_pos_feats : bool, optional
         Whether to mask features that are related to positions all together.
     flatten : bool, optional
         Whether to flatten the state into a fixed-size vector instead of a collection
