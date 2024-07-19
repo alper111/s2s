@@ -1,5 +1,7 @@
 from PIL import Image
 from typing import Optional
+import pickle
+import os
 
 import minedojo
 from minedojo.sim.mc_meta.mc import ALL_ITEMS, ALL_CRAFT_SMELT_ITEMS
@@ -567,3 +569,79 @@ class Minecraft(gym.Env):
                 )
             )
         return None if len(inventory_item_list) == 0 else inventory_item_list
+
+
+class MinecraftAbstractionDataset(torch.utils.data.Dataset):
+    ACTION_TO_IDX = {
+        "teleport": 0,
+        "attack": 1,
+        "place": 2,
+        "equip": 3,
+        "craft": 4
+    }
+    DIRECTION_TO_IDX = {
+        "north": 5,
+        "south": 6,
+        "east": 7,
+        "west": 8,
+        "top": 9
+    }
+    ITEMS_TO_IDX = {x: i for i, x in enumerate(ALL_ITEMS, 10)}
+
+    def __init__(self, root_folder):
+        self._root_folder = root_folder
+        self._state = np.load(os.path.join(root_folder, "state.npy"), allow_pickle=True)
+        self._action = pickle.load(open("out/action.pkl", "rb"))
+        self._next_state = np.load(os.path.join(root_folder, "next_state.npy"), allow_pickle=True)
+
+    def __len__(self):
+        return len(self._state)
+
+    def __getitem__(self, idx):
+        x, x_, keys = dict_to_transition(self._state[idx], self._next_state[idx])
+        a_ = self._actions_to_label(self._action[idx])
+        target = self._action[idx][1][1]
+        if len(target) != 0:
+            target = target[0]
+            target = keys.index(target)
+        else:
+            target = 0
+        a = torch.zeros(len(keys), a_.shape[0], dtype=torch.float32)
+        a[target] = a_
+        return x, a, x_
+
+    @staticmethod
+    def _actions_to_label(action):
+        action_type, args = action
+        action_args, _ = args
+        a = torch.zeros(402, dtype=torch.float32)
+        a[MinecraftAbstractionDataset.ACTION_TO_IDX[action_type]] = 1
+        if action_type == "teleport":
+            a[MinecraftAbstractionDataset.DIRECTION_TO_IDX[action_args[0]]] = 1
+        elif action_type != "attack":
+            a[MinecraftAbstractionDataset.ITEMS_TO_IDX[action_args[0]]] = 1
+        return a
+
+    @staticmethod
+    def collate_fn(batch):
+        x, a, x_ = batch[0]
+        keys = list(x.keys())
+        s = {k: [] for k in keys}
+        s_ = {k: [] for k in keys}
+        s["masks"] = {k: [] for k in keys}
+        s_["masks"] = {k: [] for k in keys}
+        a = []
+        for x, a_, x_ in batch:
+            for k in keys:
+                s[k].append(x[k])
+                s_[k].append(x_[k])
+                s["masks"][k].append(torch.ones(x[k].shape[0], dtype=torch.bool))
+                s_["masks"][k].append(torch.ones(x_[k].shape[0], dtype=torch.bool))
+            a.append(a_)
+        for k in keys:
+            s[k] = pad_sequence(s[k], batch_first=True)
+            s_[k] = pad_sequence(s_[k], batch_first=True)
+            s["masks"][k] = pad_sequence(s["masks"][k], batch_first=True)
+            s_["masks"][k] = pad_sequence(s_["masks"][k], batch_first=True)
+        a = pad_sequence(a, batch_first=True)
+        return s, a, s_
