@@ -1,4 +1,5 @@
 from copy import deepcopy
+import pickle
 
 import yaml
 import numpy as np
@@ -10,31 +11,32 @@ if __name__ == "__main__":
     world_config = yaml.safe_load(open("data/Build_Wall_Easy.yaml", "r"))
     env = Minecraft(world_config)
 
-    n_obj = len(world_config['blocks'])
     state = []
     action = []
     next_state = []
 
-    for epi in range(100):
-        env.reset()
+    for epi in range(20):
+        obs = env.reset()
         done = False
-        obs = env.prev_obs
         it = 0
         while not done:
             actions = env.available_actions()
-            a = actions[np.random.randint(0, len(actions))]
-            state.append(deepcopy(obs))
-            action.append(a)
+            a = env.sample_action()
+            old_obs = deepcopy(obs)
 
-            obs, rew, done, info = env.step(*a)
+            obs, rew, done, info = env.step(a)
+            if not info["action_success"]:
+                continue
+
+            state.append(old_obs)
+            action.append(a)
             next_state.append(deepcopy(obs))
 
             it += 1
+            if it == 200:
+                break
 
-    state = np.stack(state)
-    action = np.array(action)
-    next_state = np.stack(next_state)
-    np.save("out/state.npy", state)
-    np.save("out/action.npy", action)
-    np.save("out/next_state.npy", next_state)
-    env._env.close()
+        np.save("out/state.npy", np.stack(state))
+        pickle.dump(action, open("out/action.pkl", "wb"))
+        np.save("out/next_state.npy", np.stack(next_state))
+    env.close()
