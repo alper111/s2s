@@ -32,7 +32,7 @@ def partition_to_subgoal(dataset: S2SDataset) -> dict[tuple[int, int], S2SDatase
     # partition each option by mask and abstract effect
     for o_i, partition_k in option_partitions.items():
         # compute masked effect
-        flat_dataset = sort_dataset(partition_k, mask_pos_feats=True, flatten=True)
+        flat_dataset = sort_dataset(partition_k, shuffle_only_nonmask=True, mask_pos_feats=True, flatten=True)
         abstract_effect = flat_dataset.next_state * flat_dataset.mask
 
         # partition by abstract effect
