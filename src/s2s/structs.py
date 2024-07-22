@@ -1,13 +1,18 @@
 import logging
+import pickle
 from typing import Callable, Optional, Union
 from collections import defaultdict
 import copy
+import os
 
 import numpy as np
 from sklearn.model_selection import GridSearchCV
 from sklearn.neighbors import KernelDensity
 from scipy.spatial.distance import cdist
+import torch
+from torch.nn.utils.rnn import pad_sequence
 
+from s2s.helpers import dict_to_transition
 
 __author__ = 'Steve James and George Konidaris'
 # Modified by Alper Ahmetoglu. Original source:
@@ -118,6 +123,50 @@ class S2SDataset:
         n_factor = sum([len(obj) for obj in self.factors]) if self.factors is not None else "unset"
         return f"S2SDataset(n_sample={len(self)}, n_object={self.state.shape[1]}, " + \
                f"n_feature={self.state.shape[2]}, n_factor={n_factor})"
+
+
+class UnorderedDataset(torch.utils.data.Dataset):
+    def __init__(self, root_folder):
+        self._root_folder = root_folder
+        self._state = np.load(os.path.join(root_folder, "state.npy"), allow_pickle=True)
+        self._action = pickle.load(open("out/action.pkl", "rb"))
+        self._next_state = np.load(os.path.join(root_folder, "next_state.npy"), allow_pickle=True)
+
+    def __len__(self):
+        return len(self._state)
+
+    def __getitem__(self, idx):
+        x, x_, key_order = dict_to_transition(self._state[idx], self._next_state[idx])
+        a = self._actions_to_label(self._action[idx], key_order)
+        return x, a, x_
+
+    @staticmethod
+    def _actions_to_label(action, key_order):
+        return NotImplementedError
+
+    @staticmethod
+    def collate_fn(batch):
+        x, a, x_ = batch[0]
+        keys = list(x.keys())
+        s = {k: [] for k in keys}
+        s_ = {k: [] for k in keys}
+        s["masks"] = {k: [] for k in keys}
+        s_["masks"] = {k: [] for k in keys}
+        a = []
+        for x, a_, x_ in batch:
+            for k in keys:
+                s[k].append(x[k])
+                s_[k].append(x_[k])
+                s["masks"][k].append(torch.ones(x[k].shape[0], dtype=torch.bool))
+                s_["masks"][k].append(torch.ones(x_[k].shape[0], dtype=torch.bool))
+            a.append(a_)
+        for k in keys:
+            s[k] = pad_sequence(s[k], batch_first=True)
+            s_[k] = pad_sequence(s_[k], batch_first=True)
+            s["masks"][k] = pad_sequence(s["masks"][k], batch_first=True)
+            s_["masks"][k] = pad_sequence(s_["masks"][k], batch_first=True)
+        a = pad_sequence(a, batch_first=True)
+        return s, a, s_
 
 
 class KernelDensityEstimator:
