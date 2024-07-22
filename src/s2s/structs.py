@@ -140,6 +140,11 @@ class UnorderedDataset(torch.utils.data.Dataset):
         a = self._actions_to_label(self._action[idx], key_order)
         return x, a, x_
 
+    def sample(self, n_samples):
+        idx = np.random.choice(len(self), n_samples, replace=True)
+        batch = [self[i] for i in idx]
+        return self.collate_fn(batch)
+
     @staticmethod
     def _actions_to_label(action, key_order):
         return NotImplementedError
