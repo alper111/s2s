@@ -167,7 +167,7 @@ class NPuzzle(gym.Env):
         obs = self._render_frame()
         if self.object_centric:
             if self._last_obs is not None:
-                indices = self._match_indices(self._last_obs, obs)
+                indices = self._match_indices(self._last_obs["objects"], obs)
                 assert set(indices) == set(np.random.permutation(self._num_tile))
                 obs = np.stack([obs[i] for i in indices])
         return obs
