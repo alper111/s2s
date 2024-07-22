@@ -95,44 +95,33 @@ class MNIST8Puzzle(gym.Env):
 
     def step(self, action):
         row, col = self._location
-        # blank_idx = self._digit_idx[row, col]
-
+        action_success = False
         if action == 0:
             if self._location[1] != self._size-1:
-                # piece_idx = self._digit_idx[row, col+1]
-                # self._digit_idx[row, col] = piece_idx
-                # self._digit_idx[row, col+1] = blank_idx
-                self._location[1] = col + 1
-
-                self._permutation[row, col] = self._permutation[row, col+1]
-                self._permutation[row, col+1] = 0
+                dx = row
+                dy = col + 1
+                action_success = True
         elif action == 1:
             if self._location[0] != 0:
-                # piece_idx = self._digit_idx[row-1, col]
-                # self._digit_idx[row, col] = piece_idx
-                # self._digit_idx[row-1, col] = blank_idx
-                self._location[0] = row - 1
-
-                self._permutation[row, col] = self._permutation[row-1, col]
-                self._permutation[row-1, col] = 0
+                dx = row-1
+                dy = col
+                action_success = True
         elif action == 2:
             if self._location[1] != 0:
-                # piece_idx = self._digit_idx[row, col-1]
-                # self._digit_idx[row, col] = piece_idx
-                # self._digit_idx[row, col-1] = blank_idx
-                self._location[1] = col - 1
-
-                self._permutation[row, col] = self._permutation[row, col-1]
-                self._permutation[row, col-1] = 0
+                dx = row
+                dy = col-1
+                action_success = True
         elif action == 3:
             if self._location[0] != self._size-1:
-                # piece_idx = self._digit_idx[row+1, col]
-                # self._digit_idx[row, col] = piece_idx
-                # self._digit_idx[row+1, col] = blank_idx
-                self._location[0] = row + 1
+                dx = row + 1
+                dy = col
+                action_success = True
 
-                self._permutation[row, col] = self._permutation[row+1, col]
-                self._permutation[row+1, col] = 0
+        if action_success:
+            self._location[0] = dx
+            self._location[1] = dy
+            self._permutation[row, col] = self._permutation[dx, dy]
+            self._permutation[dx, dy] = 0
 
         self._t += 1
 
@@ -141,6 +130,7 @@ class MNIST8Puzzle(gym.Env):
         reward = self.reward
         done = self.done
         self._last_obs = obs
+        info["action_success"] = action_success
 
         if self.render_mode == "human":
             self._render_frame()
