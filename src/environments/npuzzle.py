@@ -7,7 +7,7 @@ import pygame
 from scipy.spatial.distance import cdist
 
 
-class MNIST8Puzzle(gym.Env):
+class NPuzzle(gym.Env):
     metadata = {"render_modes": ["human", "rgb_array"], "render_fps": 4}
 
     def __init__(self, permutation=None, random=False, render_mode=None,
