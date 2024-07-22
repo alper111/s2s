@@ -2,9 +2,12 @@ import os
 
 import gym
 import numpy as np
+import torch
 import torchvision
 import pygame
 from scipy.spatial.distance import cdist
+
+from s2s.structs import UnorderedDataset
 
 
 class NPuzzle(gym.Env):
@@ -46,7 +49,8 @@ class NPuzzle(gym.Env):
     def observation(self) -> np.ndarray:
         obs = {}
         objs = self._get_obs()
-        obs["objects"] = objs.copy()
+        objs = {i: obj for i, obj in enumerate(objs)}
+        obs["objects"] = objs
         obs["dimensions"] = {"objects": 786}
         return obs
 
@@ -167,7 +171,8 @@ class NPuzzle(gym.Env):
         obs = self._render_frame()
         if self.object_centric:
             if self._last_obs is not None:
-                indices = self._match_indices(self._last_obs["objects"], obs)
+                last_obs = np.stack(list(self._last_obs["objects"].values()))
+                indices = self._match_indices(last_obs, obs)
                 assert set(indices) == set(np.random.permutation(self._num_tile))
                 obs = np.stack([obs[i] for i in indices])
         return obs
@@ -243,3 +248,16 @@ class NPuzzle(gym.Env):
     @staticmethod
     def get_delta_mask(state: np.ndarray, next_state: np.ndarray) -> np.ndarray:
         return state != next_state
+
+
+class NPuzzleDataset(UnorderedDataset):
+    ACTION_TO_ONEHOT = {
+        0: torch.tensor([1, 0, 0, 0], dtype=torch.float),
+        1: torch.tensor([0, 1, 0, 0], dtype=torch.float),
+        2: torch.tensor([0, 0, 1, 0], dtype=torch.float),
+        3: torch.tensor([0, 0, 0, 1], dtype=torch.float)
+    }
+
+    @staticmethod
+    def _actions_to_label(action, key_order):
+        return NPuzzleDataset.ACTION_TO_ONEHOT[action]
