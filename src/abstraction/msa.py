@@ -55,7 +55,9 @@ class MarkovStateAbstraction(torch.nn.Module):
         z_proj = self.pre_attention(z_all)
         agg = self.inverse_att(z_proj, src_key_padding_mask=~mask)
         a_logits = self.inverse_fc(agg)
-        return torch.nn.functional.binary_cross_entropy_with_logits(a_logits, a.to(self.device))
+        loss = torch.nn.functional.binary_cross_entropy_with_logits(a_logits, a.to(self.device), reduction="none")
+        loss = ((loss * mask.unsqueeze(2)).sum(dim=[1, 2]) / mask.sum(dim=1)).mean()
+        return loss
 
     def density_loss(self, z, z_, pad_mask):
         zf = torch.cat([z[k] for k in self._order], dim=1)
