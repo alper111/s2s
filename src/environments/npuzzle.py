@@ -44,7 +44,11 @@ class MNIST8Puzzle(gym.Env):
 
     @property
     def observation(self) -> np.ndarray:
-        return self._get_obs()
+        obs = {}
+        objs = self._get_obs()
+        obs["objects"] = objs.copy()
+        obs["dimensions"] = {"objects": 786}
+        return obs
 
     @property
     def reward(self) -> float:
