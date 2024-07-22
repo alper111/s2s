@@ -59,7 +59,7 @@ class MarkovStateAbstraction(torch.nn.Module):
             a = a.unsqueeze(1)
             a = a.repeat(1, a_logits.shape[1], 1)
         loss = torch.nn.functional.binary_cross_entropy_with_logits(a_logits, a.to(self.device), reduction="none")
-        loss = ((loss * mask.unsqueeze(2)).sum(dim=[1, 2]) / mask.sum(dim=1)).mean()
+        loss = ((loss * mask.unsqueeze(2)).sum(dim=[1, 2])).mean()
         return loss
 
     def density_loss(self, z, z_, pad_mask):
