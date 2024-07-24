@@ -12,9 +12,9 @@ pip install -r requirements.txt
 ```
 |-- docs
 |-- src
-|   -- abstraction    # Markov state abstraction
-|   -- environments
-|   -- s2s            # Skills to symbols core
+    |-- abstraction    # Markov state abstraction
+    |-- environments
+    |-- s2s            # Skills to symbols core
 ```
 
 ### Skills to Symbols core
