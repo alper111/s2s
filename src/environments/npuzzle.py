@@ -253,13 +253,6 @@ class NPuzzle(gym.Env):
 
 
 class NPuzzleDataset(UnorderedDataset):
-    ACTION_TO_ONEHOT = {
-        0: torch.tensor([1, 0, 0, 0], dtype=torch.float),
-        1: torch.tensor([0, 1, 0, 0], dtype=torch.float),
-        2: torch.tensor([0, 0, 1, 0], dtype=torch.float),
-        3: torch.tensor([0, 0, 0, 1], dtype=torch.float)
-    }
-
     @staticmethod
     def _actions_to_label(action, key_order):
-        return NPuzzleDataset.ACTION_TO_ONEHOT[action]
+        return torch.tensor(action, dtype=torch.long)
