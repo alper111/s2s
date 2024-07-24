@@ -20,21 +20,18 @@ class MarkovStateAbstraction(torch.nn.Module):
             torch.nn.Linear(n_hidden, n_latent)
         )
         self.pre_attention = torch.nn.Sequential(
-            torch.nn.Linear(n_latent * 2, n_hidden),
+            torch.nn.Linear(n_latent, n_hidden),
             torch.nn.ReLU()
         )
-        _inv_att_layers = torch.nn.TransformerEncoderLayer(d_model=n_hidden, nhead=4, batch_first=True)
-        _den_att_layers = torch.nn.TransformerEncoderLayer(d_model=n_hidden, nhead=4, batch_first=True)
-        # fix num_layers to 4 for now
-        self.inverse_att = torch.nn.TransformerEncoder(_inv_att_layers, num_layers=4)
-        self.inverse_fc = torch.nn.Sequential(
-            torch.nn.Linear(n_hidden, n_hidden),
+        _att_layers = torch.nn.TransformerEncoderLayer(d_model=n_hidden, nhead=4, batch_first=True)
+        self.attention = torch.nn.TransformerEncoder(_att_layers, num_layers=4)
+        self.inverse = torch.nn.Sequential(
+            torch.nn.Linear(2*n_hidden, n_hidden),
             torch.nn.ReLU(),
             torch.nn.Linear(n_hidden, action_dim)
         )
-        self.density_att = torch.nn.TransformerEncoder(_den_att_layers, num_layers=4)
         self.density_fc = torch.nn.Sequential(
-            torch.nn.Linear(n_hidden, n_hidden),
+            torch.nn.Linear(2*n_hidden, n_hidden),
             torch.nn.ReLU(),
             torch.nn.Linear(n_hidden, 1)
         )
@@ -43,59 +40,54 @@ class MarkovStateAbstraction(torch.nn.Module):
     def device(self):
         return next(self.parameters()).device
 
+    def inverse_forward(self, z, z_):
+        z_all = torch.cat([z, z_], dim=-1)
+        a_logits = self.inverse(z_all)
+        return a_logits
+
+    def density_forward(self, z, z_, z_n):
+        z_pos = torch.cat([z, z_], dim=-1)
+        z_neg = torch.cat([z, z_n], dim=-1)
+        z_all = torch.cat([z_pos, z_neg], dim=0)
+        y_logits = self.density_fc(z_all).squeeze()
+        return y_logits
+
     def encode(self, x):
         return {k: self.feature(self.projection[k](x[k].to(self.device))) for k in x if k != "masks"}
 
-    def inverse_loss(self, z, z_, a, pad_mask):
+    def aggregate(self, z, pad_mask):
         zf = torch.cat([z[k] for k in self._order], dim=1)
-        zf_ = torch.cat([z_[k] for k in self._order], dim=1)
-        z_all = torch.cat([zf, zf_], dim=-1)
         mask = torch.cat([pad_mask[k].to(self.device) for k in self._order], dim=1)
+        z_proj = self.pre_attention(zf)
+        z_agg = self.attention(z_proj, src_key_padding_mask=~mask)
+        z_agg = (z_agg * mask.unsqueeze(2)).sum(dim=1) / mask.sum(dim=1).unsqueeze(1)
+        return z_agg
 
-        z_proj = self.pre_attention(z_all)
-        agg = self.inverse_att(z_proj, src_key_padding_mask=~mask)
-        a_logits = self.inverse_fc(agg)
-        if a.ndim == 2:
-            a = a.unsqueeze(1)
-            a = a.repeat(1, a_logits.shape[1], 1)
-        loss = torch.nn.functional.binary_cross_entropy_with_logits(a_logits, a.to(self.device), reduction="none")
-        loss = ((loss * mask.unsqueeze(2)).sum(dim=[1, 2])).mean()
+    def forward(self, x):
+        z = self.encode(x)
+        z_agg = self.aggregate(z, x["masks"])
+        return z_agg
+
+    def inverse_loss(self, z, z_, a):
+        a_logits = self.inverse_forward(z, z_)
+        loss = torch.nn.functional.cross_entropy(a_logits, a.to(self.device))
         return loss
 
-    def density_loss(self, z, z_, pad_mask):
-        zf = torch.cat([z[k] for k in self._order], dim=1)
-        zf_ = torch.cat([z_[k] for k in self._order], dim=1)
-        mask = torch.cat([pad_mask[k].to(self.device) for k in self._order], dim=1)
-
-        z_pos = torch.cat([zf, zf_], dim=-1)
-        z_neg = torch.cat([zf, zf_[torch.randperm(zf_.shape[0])]], dim=-1)
-        z_all = torch.cat([z_pos, z_neg], dim=0)
-        mask_all = torch.cat([mask, mask], dim=0)
-        y = torch.cat([torch.ones(z_pos.shape[0]), torch.zeros(z_neg.shape[0])], dim=0).to(self.device)
-
-        z_proj = self.pre_attention(z_all)
-        agg = self.density_att(z_proj, src_key_padding_mask=~mask_all)
-        agg = agg.mean(dim=1)
-        y_logits = self.density_fc(agg).squeeze()
+    def density_loss(self, z, z_, z_n):
+        n_batch = z.shape[0]
+        y_logits = self.density_forward(z, z_, z_n)
+        y = torch.cat([torch.ones(n_batch), torch.zeros(n_batch)], dim=0).to(self.device)
         return torch.nn.functional.binary_cross_entropy_with_logits(y_logits, y)
 
     def smoothness_loss(self, z, z_):
-        mse_all = 0.0
-        for k in self._order:
-            mse = torch.nn.functional.mse_loss(z[k], z_[k], reduction="none")
-            mse_all = mse_all + torch.square(torch.relu(mse - 1)).mean()
-        return mse_all
+        mse = torch.nn.functional.mse_loss(z, z_, reduction="none")
+        return torch.square(torch.relu(mse-1)).mean()
 
-    def forward(self, x, x_):
-        x_all = {k: torch.cat([x[k], x_[k]], dim=0) for k in x if k != "masks"}
-        z_all = self.encode(x_all)
-        z = {k: z_all[k][:x[k].shape[0]] * x["masks"][k].to(self.device).unsqueeze(2) for k in x if k != "masks"}
-        z_ = {k: z_all[k][x[k].shape[0]:] * x["masks"][k].to(self.device).unsqueeze(2) for k in x if k != "masks"}
-        return z, z_
-
-    def loss(self, x, x_, a):
-        z, z_ = self.forward(x, x_)
-        inv_loss = self.inverse_loss(z, z_, a, x["masks"])
-        density_loss = self.density_loss(z, z_, x["masks"])
-        smoothness_loss = self.smoothness_loss(z, z_)
+    def loss(self, x, x_, x_neg, a):
+        z_agg = self.forward(x)
+        z_agg_ = self.forward(x_)
+        zn_agg = self.forward(x_neg)
+        inv_loss = self.inverse_loss(z_agg, z_agg_, a)
+        density_loss = self.density_loss(z_agg, z_agg_, zn_agg)
+        smoothness_loss = self.smoothness_loss(z_agg, z_agg_)
         return inv_loss, density_loss, smoothness_loss
