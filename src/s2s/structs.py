@@ -129,7 +129,7 @@ class UnorderedDataset(torch.utils.data.Dataset):
     def __init__(self, root_folder):
         self._root_folder = root_folder
         self._state = np.load(os.path.join(root_folder, "state.npy"), allow_pickle=True)
-        self._action = pickle.load(open("out/action.pkl", "rb"))
+        self._action = pickle.load(open(os.path.join(root_folder, "action.pkl"), "rb"))
         self._next_state = np.load(os.path.join(root_folder, "next_state.npy"), allow_pickle=True)
 
     def __len__(self):
