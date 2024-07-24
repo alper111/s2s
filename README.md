@@ -9,6 +9,15 @@ pip install -r requirements.txt
 ```
 
 ## Outline of the code
+```
+|-- docs
+|-- src
+|   -- abstraction    # Markov state abstraction
+|   -- environments
+|   -- s2s            # Skills to symbols core
+```
+
+### Skills to Symbols core
 `factorise.py`: Contains a single method, `factors_from_partitions`, where we learn the factors of the environment directly from the option-mask changes. If the raw sensory input high-dimensional (such as pixels), this method might produce a lot of factors, which in turn increases the number of learned symbols.
 
 `partition.py`: The skills to symbols framework requires options to satisfy the strong subgoal option property: $\text{Im}(X, o) = \text{Eff}(o)$, that is, effect of an option does not depend on its initiation vector (see Def. 11 in [[1](#1)]). This can be practically achieved by partitioning the dataset based on the effect set. The current implementation partitions based on X-means algorithm [[2](#2)].
@@ -26,6 +35,32 @@ pip install -r requirements.txt
   - `build_schemata`: Given the precondition and effect propositions for a partition, this method builds the action schema that covers which symbols should be active before the execution, and which symbols should be turned-off and on after execution (see Section 3.2.4 in [[1](#1)]).
 
 *<a name="*"></a>Currently, there are three options for the factor independency: (1) a linear dependency test by checking the covariance, (2) k-nearest neighbor two-sample test which can possibly find non-linear relations [[3](#3)], and (3) assuming that they are independent to reduce the number of symbols (possibly losing soundness).
+
+### Environments
+Environments follow the `gym` interface with some specifications on the observation space. The main differences are that (1) a state observation is object-centric (2) with (possibly) multiple modalities. For instance, in the Minecraft example, there is an agent observation, object-centric observations, and an inventory observation.
+
+A state shall be a dictionary of the following structure:
+```
+state = {
+    "modality1": {
+        entity1_id: np.ndarray,
+        entity2_id: np.ndarray,
+        ...
+    },
+    "modality2": {
+        entity1_id: np.ndarray,
+        entity3_id: np.ndarray
+    },
+    ...
+    "dimensions": {
+        "modality1": 3072,
+        "modality2": 128,
+        ...
+    }
+}
+```
+An action shall be an `int` indicating which action has been executed (i.e., `gym.spaces.Discrete`).
+A Markov state abstraction can be trained on top of these `(state, action, next_state)` tuples.
 
 ## References
 [1]<a name="1"></a> Konidaris, G., Kaelbling, L. P., & Lozano-Perez, T. (2018). From skills to symbols: Learning symbolic representations for abstract high-level planning. Journal of Artificial Intelligence Research, 61, 215-289.  
