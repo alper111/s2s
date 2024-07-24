@@ -170,7 +170,10 @@ class UnorderedDataset(torch.utils.data.Dataset):
             s_[k] = pad_sequence(s_[k], batch_first=True)
             s["masks"][k] = pad_sequence(s["masks"][k], batch_first=True)
             s_["masks"][k] = pad_sequence(s_["masks"][k], batch_first=True)
-        a = pad_sequence(a, batch_first=True)
+        if a[0].ndim == 0:
+            a = torch.tensor(a)
+        else:
+            a = pad_sequence(a, batch_first=True)
         return s, a, s_
 
 
