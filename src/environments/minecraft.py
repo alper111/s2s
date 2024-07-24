@@ -28,7 +28,7 @@ USEFUL_ITEMS = {
 
 
 class Minecraft(gym.Env):
-    def __init__(self, world_config: dict, world_seed: int = 0, seed: int = 0):
+    def __init__(self, world_config: dict, world_seed: int = 0, seed: int = 0, max_steps=200):
         drawing_str = None
         initial_inventory = None
         world_limit = {"xmin": -10, "xmax": 10, "ymin": 4, "ymax": 10, "zmin": -10, "zmax": 10}
@@ -43,6 +43,9 @@ class Minecraft(gym.Env):
         for b in world_config["blocks"]:
             pos = b["position"]
             self._initial_blocks.append((int(pos["x"]), int(pos["y"]), int(pos["z"])))
+
+        self._max_steps = max_steps
+        self._t = 0
 
         self._env = minedojo.make(
             task_id="open-ended",
@@ -107,7 +110,7 @@ class Minecraft(gym.Env):
     @property
     def done(self) -> bool:
         available_actions = self.available_actions()
-        return len(available_actions) == 0
+        return (len(available_actions) == 0) or (self._t >= self._max_steps)
 
     @property
     def info(self) -> dict:
@@ -145,6 +148,7 @@ class Minecraft(gym.Env):
         obs = self._env.reset()
         self._prev_obs = obs
         self._observe_all_blocks()
+        self._t = 0
         return self.observation
 
     def step(self, action) -> tuple[np.ndarray, float, bool, dict]:
@@ -167,6 +171,7 @@ class Minecraft(gym.Env):
         else:
             raise ValueError("Invalid action type")
 
+        self._t += 1
         obs = self.observation
         reward = self.reward
         done = self.done
