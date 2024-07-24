@@ -64,5 +64,5 @@ A Markov state abstraction can be trained on top of these `(state, action, next_
 
 ## References
 [1]<a name="1"></a> Konidaris, G., Kaelbling, L. P., & Lozano-Perez, T. (2018). From skills to symbols: Learning symbolic representations for abstract high-level planning. Journal of Artificial Intelligence Research, 61, 215-289.  
-[2]<a name="2"></a> Pelleg, D., & Moore, A. (2000, June). X-means: Extending K-means with E cient Estimation of the Number of Clusters. In ICML’00 (pp. 727-734).  
+[2]<a name="2"></a> Pelleg, D., & Moore, A. (2000, June). X-means: Extending K-means with Efficient Estimation of the Number of Clusters. In ICML’00 (pp. 727-734).  
 [3]<a name="3"></a> Lopez-Paz, D., & Oquab, M. (2016). Revisiting classifier two-sample tests. arXiv preprint arXiv:1610.06545.
