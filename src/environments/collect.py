@@ -1,4 +1,7 @@
 from typing import Callable, Optional
+from copy import deepcopy
+import os
+import pickle
 
 import numpy as np
 import gym
@@ -61,3 +64,58 @@ def collect(n: int, env: gym.Env, options: Optional[dict[str, Callable]] = None)
             i += 1
 
     return S2SDataset(state_arr, action_arr, reward_arr, next_state_arr, mask_arr)
+
+
+def collect_raw(n: int, env: gym.Env, options: Optional[dict[str, Callable]] = None, save_folder: str = "out") -> None:
+    """
+    Collects n samples from the environment and saves them to disk.
+
+    Parameters
+    ----------
+    n: int
+        Number of samples to collect.
+    env: BaseEnv
+        Environment to collect samples from.
+    options: dict[str, Callable], default=None
+        Options to execute in the environment.
+    save_folder: str, default="out"
+        Folder to save the dataset.
+    """
+
+    state = []
+    action = []
+    reward = []
+    next_state = []
+
+    i = 0
+    while i < n:
+        obs = env.reset()
+        done = False
+
+        while (not done) and (i < n):
+            if options is None:
+                a = env.sample_action()
+            else:
+                # TODO:
+                # select a random option o with I_o > 0
+                # execute it in a loop till it terminates
+                raise NotImplementedError
+            old_obs = deepcopy(obs)
+
+            obs, rew, done, info = env.step(a)
+            if not info["action_success"]:
+                continue
+
+            state.append(old_obs)
+            action.append(a)
+            reward.append(rew)
+            next_state.append(deepcopy(obs))
+            i += 1
+
+    env.close()
+
+    os.makedirs(save_folder, exist_ok=True)
+    np.save(os.path.join(save_folder, "state.npy"), np.stack(state))
+    pickle.dump(action, open(os.path.join(save_folder, "action.pkl"), "wb"))
+    np.save(os.path.join(save_folder, "reward.npy"), np.array(reward))
+    np.save(os.path.join(save_folder, "next_state.npy"), np.stack(next_state))
