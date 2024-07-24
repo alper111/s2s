@@ -9,7 +9,7 @@ import pygame
 from scipy.spatial.distance import cdist
 
 
-class MNISTSokoban(gym.Env):
+class Sokoban(gym.Env):
     metadata = {"render_modes": ["human", "array"], "render_fps": 5}
 
     def __init__(self, map_file: str = None, size: tuple[int, int] = None, object_centric: bool = False,
