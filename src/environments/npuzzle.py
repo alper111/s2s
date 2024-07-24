@@ -47,11 +47,13 @@ class NPuzzle(gym.Env):
 
     @property
     def observation(self) -> np.ndarray:
-        obs = {}
-        objs = self._get_obs()
-        objs = {i: obj for i, obj in enumerate(objs)}
-        obs["objects"] = objs
-        obs["dimensions"] = {"objects": 786}
+        obs = self._get_obs()
+        if self.object_centric:
+            obs_dict = {}
+            objs = {i: obj for i, obj in enumerate(obs)}
+            obs_dict["objects"] = objs
+            obs_dict["dimensions"] = {"objects": 786}
+            return obs_dict
         return obs
 
     @property

@@ -53,6 +53,13 @@ class Sokoban(gym.Env):
 
     @property
     def observation(self) -> np.ndarray:
+        obs = self._get_obs()
+        if self.object_centric:
+            obs_dict = {}
+            objs = {i: obj for i, obj in enumerate(obs)}
+            obs_dict["objects"] = objs
+            obs_dict["dimensions"] = {"objects": 1026}
+            return obs_dict
         return self._get_obs()
 
     @property
@@ -117,6 +124,7 @@ class Sokoban(gym.Env):
             info = self.info
             reward = self.reward
             done = self.done
+            info["action_success"] = False
             return obs, reward, done, info
 
         next_bg, next_tile = self._map[next_pos[0]][next_pos[1]]
@@ -149,6 +157,7 @@ class Sokoban(gym.Env):
         reward = self.reward
         done = self.done
         self._last_obs = obs
+        info["action_success"] = True
 
         return obs, reward, done, info
 
@@ -266,9 +275,8 @@ class Sokoban(gym.Env):
         obs = self._render_frame()
         if self.object_centric:
             if self._last_obs is not None:
-                # obs_imgs = np.stack([x[:-2] for x in obs])
-                # last_obs_imgs = np.stack([x[:-2] for x in self._last_obs])
-                indices = self._match_indices(self._last_obs, obs)
+                last_obs = np.stack(list(self._last_obs["objects"].values()))
+                indices = self._match_indices(last_obs, obs)
                 obs = np.stack([obs[i] for i in indices])
         return obs
 
