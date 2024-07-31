@@ -58,8 +58,8 @@ def main(args):
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--env", type=str, help="The environment name.")
+    parser = argparse.ArgumentParser("Train Markov state abstractions")
+    parser.add_argument("--env", type=str, help="The environment name")
     parser.add_argument("--batch-size", type=int, default=128, help="Batch size")
     parser.add_argument("--lr", type=float, default=1e-4, help="Learning rate")
     parser.add_argument("--epoch", type=int, default=1000, help="Number of epochs")
