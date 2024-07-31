@@ -390,7 +390,7 @@ def _create_factored_densities(data: np.ndarray, vocabulary: UniquePredicateList
     _n_expected_symbol = sum([2**len(x)-1 for x in dependency_groups])
     logger.info(f"n_factors={len(factors)}, n_groups={len(dependency_groups)}, n_expected_symbol={_n_expected_symbol}")
     for group in dependency_groups:
-        predicate = vocabulary.append(data, group)
+        predicate = vocabulary.append(data, list(group))
         densities.append(predicate)
     return densities
 
