@@ -104,7 +104,7 @@ def partition_to_subgoal(dataset: S2SDataset) -> dict[tuple[int, int], S2SDatase
     Returns
     -------
     partitions : dict[tuple[int, int], S2SDataset]
-        A dictionary of partitioned datasets with keys as options and subgoals.
+        A dictionary of partitioned datasets with keys as option-subgoals.
     """
     partitions = {}
 
