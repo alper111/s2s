@@ -17,7 +17,8 @@ class MarkovStateAbstraction(torch.nn.Module):
             torch.nn.ReLU(),
             torch.nn.Linear(n_hidden, n_hidden),
             torch.nn.ReLU(),
-            torch.nn.Linear(n_hidden, n_latent)
+            torch.nn.Linear(n_hidden, n_latent),
+            GumbelSigmoidLayer()
         )
         self.pre_attention = torch.nn.Sequential(
             torch.nn.Linear(n_latent, n_hidden),
@@ -56,8 +57,8 @@ class MarkovStateAbstraction(torch.nn.Module):
         return {k: self.feature(self.projection[k](x[k].to(self.device))) for k in x if k != "masks"}
 
     def aggregate(self, z, pad_mask):
-        zf = torch.cat([z[k] for k in self._order], dim=1)
-        mask = torch.cat([pad_mask[k].to(self.device) for k in self._order], dim=1)
+        zf = self._flatten(z)
+        mask = self._flatten(pad_mask).to(self.device)
         z_proj = self.pre_attention(zf)
         z_agg = self.attention(z_proj, src_key_padding_mask=~mask)
         z_agg = (z_agg * mask.unsqueeze(2)).sum(dim=1) / mask.sum(dim=1).unsqueeze(1)
@@ -66,7 +67,7 @@ class MarkovStateAbstraction(torch.nn.Module):
     def forward(self, x):
         z = self.encode(x)
         z_agg = self.aggregate(z, x["masks"])
-        return z_agg
+        return z, z_agg
 
     def inverse_loss(self, z, z_, a):
         a_logits = self.inverse_forward(z, z_)
@@ -79,15 +80,52 @@ class MarkovStateAbstraction(torch.nn.Module):
         y = torch.cat([torch.ones(n_batch), torch.zeros(n_batch)], dim=0).to(self.device)
         return torch.nn.functional.binary_cross_entropy_with_logits(y_logits, y)
 
-    def smoothness_loss(self, z, z_):
-        mse = torch.nn.functional.mse_loss(z, z_, reduction="none")
-        return torch.square(torch.relu(mse-1)).mean()
+    def regularization(self, z, z_):
+        z = self._flatten(z)
+        z_ = self._flatten(z_)
+        l1_loss = torch.nn.functional.l1_loss(z, z_)
+        return l1_loss
 
     def loss(self, x, x_, x_neg, a):
-        z_agg = self.forward(x)
-        z_agg_ = self.forward(x_)
-        zn_agg = self.forward(x_neg)
+        z, z_agg = self.forward(x)
+        z_, z_agg_ = self.forward(x_)
+        _, zn_agg = self.forward(x_neg)
         inv_loss = self.inverse_loss(z_agg, z_agg_, a)
         density_loss = self.density_loss(z_agg, z_agg_, zn_agg)
-        smoothness_loss = self.smoothness_loss(z_agg, z_agg_)
-        return inv_loss, density_loss, smoothness_loss
+        regularization = self.regularization(z, z_)
+        return inv_loss, density_loss, regularization
+
+    def _flatten(self, x):
+        return torch.cat([x[k] for k in self._order], dim=1)
+
+
+class GumbelSigmoidLayer(torch.nn.Module):
+    def __init__(self, hard=False, T=1.0):
+        super(GumbelSigmoidLayer, self).__init__()
+        self.hard = hard
+        self.T = T
+
+    def forward(self, x):
+        if not self.training:
+            return torch.sigmoid(x)
+        else:
+            return gumbel_sigmoid(x, self.T, self.hard)
+
+
+def sample_gumbel_diff(*shape):
+    eps = 1e-20
+    u1 = torch.rand(shape)
+    u2 = torch.rand(shape)
+    diff = torch.log(torch.log(u2+eps)/torch.log(u1+eps)+eps)
+    return diff
+
+
+def gumbel_sigmoid(logits, T=1.0, hard=False):
+    g = sample_gumbel_diff(*logits.shape)
+    g = g.to(logits.device)
+    y = (g + logits) / T
+    s = torch.sigmoid(y)
+    if hard:
+        s_hard = s.round()
+        s = (s_hard - s).detach() + s
+    return s
