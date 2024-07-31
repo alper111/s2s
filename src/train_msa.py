@@ -46,8 +46,8 @@ def main(args):
             avg_density_loss += density_loss.item()
             avg_reg_loss += reg_loss.item()
         print(f"Epoch {e + 1}/{args.epoch}, inv_loss={avg_inv_loss / len(loader):.5f}, "
-            f"density_loss={avg_density_loss / len(loader):.5f}, "
-            f"smoothness_loss={avg_reg_loss / len(loader):.5f}")
+              f"density_loss={avg_density_loss / len(loader):.5f}, "
+              f"smoothness_loss={avg_reg_loss / len(loader):.5f}")
 
         if (e+1) % 20 == 0:
             save_folder = os.path.join("save", args.env)
