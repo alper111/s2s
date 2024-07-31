@@ -10,6 +10,88 @@ from s2s.structs import S2SDataset, sort_dataset
 logger = logging.getLogger(__name__)
 
 
+def partition_discrete_set(dataset: S2SDataset, min_samples: int = 1) -> dict[tuple[int, int], S2SDataset]:
+    """
+    Partition a discrete dataset created by Markov state abstractions such that
+    each partitions corresponds to a subgoal.
+
+    Parameters
+    ----------
+    dataset : S2SDataset
+        A discrete dataset to be partitioned.
+    min_samples : int, optional
+        The minimum number of samples for a partition to be considered as subgoal.
+        Default is 1.
+
+    Returns
+    -------
+    partitions : dict[tuple[int, int], S2SDataset]
+        A dictionary of partitioned datasets with keys as option-subgoals.
+    """
+    partitions = {}
+
+    # split by options
+    option_partitions = _split_by_options(dataset)
+
+    # partition each option by its abstract effect
+    for o_i, partition_k in option_partitions.items():
+        unique_effects = {}
+        for j in range(len(partition_k)):
+            m_ij = partition_k.mask[j]
+            e_ij = partition_k.next_state[j]
+            e_str = []
+            for ri, row in enumerate(m_ij):
+                row_str = []
+                for ci, digit in enumerate(row):
+                    if digit:
+                        # this is finite since we assume a discrete set
+                        row_str.append(str(e_ij[ri, ci]))
+                    else:
+                        # meaning this digit has not been changed
+                        row_str.append('x')
+                row_str = "".join(row_str)
+                e_str.append(row_str)
+            indices = [x[0] for x in sorted(enumerate(e_str), key=lambda x: x[1])]
+            e_sorted = [e_str[x] for x in indices]
+            key = tuple([x for x in e_sorted if x != 'x'*len(x)])
+            if key not in unique_effects:
+                unique_effects[key] = {
+                    "state": [],
+                    "option": [],
+                    "reward": [],
+                    "next_state": [],
+                    "mask": []
+                }
+
+            s, o, r, s_, m = partition_k[j]
+            subgoal = unique_effects[key]
+            subgoal["state"].append(s[indices])
+            subgoal["option"].append(o)
+            subgoal["reward"].append(r)
+            subgoal["next_state"].append(s_[indices])
+            subgoal["mask"].append(m[indices])
+
+        for p_i, key in enumerate(unique_effects):
+            subgoal = unique_effects[key]
+            partition = S2SDataset(
+                np.stack(subgoal["state"]),
+                np.array(subgoal["option"]),
+                np.array(subgoal["reward"]),
+                np.stack(subgoal["next_state"]),
+                np.stack(subgoal["mask"])
+            )
+            partitions[(o_i, p_i)] = partition
+
+    if min_samples > 1:
+        partitions_filtered = {}
+        for p_i in partitions:
+            if len(partitions[p_i]) > min_samples:
+                partitions_filtered[p_i] = partitions[p_i]
+        return partitions_filtered
+
+    return partitions
+
+
 def partition_to_subgoal(dataset: S2SDataset) -> dict[tuple[int, int], S2SDataset]:
     """
     Partition a dataset such that each partition corresponds to a subgoal.
