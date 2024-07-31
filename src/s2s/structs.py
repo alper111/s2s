@@ -1171,9 +1171,9 @@ def sort_dataset(dataset: S2SDataset, mask_full_obj: bool = False,
     assert dataset.state.ndim == 3, "State should be 3D: (n_samples, n_objects, n_features)"
 
     n_sample, n_obj, n_feat = dataset.state.shape
-    state = np.zeros((n_sample, n_obj, n_feat))
-    next_state = np.zeros((n_sample, n_obj, n_feat))
-    mask = np.zeros((n_sample, n_obj, n_feat))
+    state = np.zeros((n_sample, n_obj, n_feat), dtype=dataset.state.dtype)
+    next_state = np.zeros((n_sample, n_obj, n_feat), dtype=dataset.next_state.dtype)
+    mask = np.zeros((n_sample, n_obj, n_feat), dtype=bool)
 
     for i in range(n_sample):
         order = []
