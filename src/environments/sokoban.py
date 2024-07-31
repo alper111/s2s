@@ -3,10 +3,13 @@ import os
 
 import gym.spaces
 import numpy as np
+import torch
 import torchvision
 import gym
 import pygame
 from scipy.spatial.distance import cdist
+
+from s2s.structs import UnorderedDataset
 
 
 class Sokoban(gym.Env):
@@ -385,3 +388,9 @@ class Sokoban(gym.Env):
     @staticmethod
     def get_delta_mask(state: np.ndarray, next_state: np.ndarray) -> np.ndarray:
         return state != next_state
+
+
+class SokobanDataset(UnorderedDataset):
+    @staticmethod
+    def _actions_to_label(action, key_order):
+        return torch.tensor(action, dtype=torch.long)

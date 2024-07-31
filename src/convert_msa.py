@@ -8,6 +8,7 @@ import numpy as np
 from abstraction.msa import MarkovStateAbstraction
 from environments.minecraft import MinecraftDataset
 from environments.npuzzle import NPuzzleDataset
+from environments.sokoban import SokobanDataset
 from s2s.structs import S2SDataset
 
 
@@ -16,7 +17,7 @@ def main(args):
     if args.env == "npuzzle":
         dataset = NPuzzleDataset(data_path)
     elif args.env == "sokoban":
-        raise NotImplementedError
+        raise SokobanDataset(data_path)
     elif args.env == "minecraft":
         dataset = MinecraftDataset(data_path)
     else:
