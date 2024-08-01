@@ -73,21 +73,17 @@ class Minecraft(gym.Env):
         obs = {}
         if self._agent_img is not None:
             img = self._agent_img.copy().reshape(-1) / 255.0
-            ax, ay, az = self.agent_pos
-            east_exists = self._block_exists(ax+1, ay, az)
-            south_exists = self._block_exists(ax, ay, az+1)
-            west_exists = self._block_exists(ax-1, ay, az)
-            north_exists = self._block_exists(ax, ay, az-1)
-            top_exists = self._block_exists(ax, ay+1, az)
-            neighbors = np.array([east_exists, south_exists, west_exists, north_exists, top_exists], dtype=float)
-            obs["agent"] = {0: np.concatenate([img, neighbors])}
+            obs["agent"] = {0: img}
         else:
             obs["agent"] = {0: None}
         inventory_img = np.transpose(self.prev_obs["rgb"][:, 558:598, 220:580], (1, 2, 0))
         inventory_img = Image.fromarray(inventory_img)
         inventory_img = inventory_img.resize((32*9, 32))
-        inventory_img = np.array(inventory_img).reshape(-1) / 255.0
-        obs["inventory"] = {1: inventory_img}
+        inventory_img = np.array(inventory_img).reshape(32, 9, 32, 3) / 255.0
+        inventory_img = np.transpose(inventory_img, (1, 0, 2, 3))
+        obs["inventory"] = {}
+        for i, inv_item in enumerate(inventory_img):
+            obs["inventory"][i] = inv_item.reshape(-1)
         obs["objects"] = {}
         for key in self._block_map:
             if self._block_map[key][0]:
@@ -98,9 +94,19 @@ class Minecraft(gym.Env):
                 west_exists = self._block_exists(x-1, y, z)
                 north_exists = self._block_exists(x, y, z-1)
                 top_exists = self._block_exists(x, y+1, z)
+                if (x+1, y, z) == self.agent_pos:
+                    east_exists = 2
+                elif (x, y, z+1) == self.agent_pos:
+                    south_exists = 2
+                elif (x-1, y, z) == self.agent_pos:
+                    west_exists = 2
+                elif (x, y, z-1) == self.agent_pos:
+                    north_exists = 2
+                elif (x, y+1, z) == self.agent_pos:
+                    top_exists = 2
                 neighbors = np.array([east_exists, south_exists, west_exists, north_exists, top_exists], dtype=float)
                 obs["objects"][key] = np.concatenate([img, neighbors])
-        obs["dimensions"] = {"inventory": 32*32*3*9, "agent": 32*32*3+5, "objects": 32*32*3+5}
+        obs["dimensions"] = {"inventory": 32*32*3, "agent": 32*32*3, "objects": 32*32*3+5}
         return obs
 
     @property
@@ -473,9 +479,6 @@ class Minecraft(gym.Env):
     def _block_exists(self, x, y, z) -> bool:
         if (x, y, z) not in self._block_map:
             return False
-        ax, ay, az = self.agent_pos
-        if (x == ax) and (y == ay) and (z == az):
-            return True
         return self._block_map[(x, y, z)][0]
 
     def _get_intrinsic_matrix(self) -> np.ndarray:
