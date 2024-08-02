@@ -7,6 +7,7 @@ import gym
 import numpy as np
 import torch
 
+from s2s.helpers import dict_to_transition
 from s2s.structs import UnorderedDataset
 
 USEFUL_ITEMS = {
@@ -66,20 +67,20 @@ class Minecraft(gym.Env):
         self._block_map = {}
         self._agent_img = None
         self._last_targeted_block = None
-        self._prev_obs = None
+        self._prev_obs = {}
 
     @property
     def observation(self) -> dict:
         obs = {}
         if self._agent_img is not None:
-            img = self._agent_img.copy().reshape(-1) / 255.0
+            img = self._agent_img.copy().reshape(-1)
             obs["agent"] = {0: img}
         else:
             obs["agent"] = {0: None}
         inventory_img = np.transpose(self.prev_obs["rgb"][:, 558:598, 220:580], (1, 2, 0))
         inventory_img = Image.fromarray(inventory_img)
         inventory_img = inventory_img.resize((32*9, 32))
-        inventory_img = np.array(inventory_img).reshape(32, 9, 32, 3) / 255.0
+        inventory_img = np.array(inventory_img).reshape(32, 9, 32, 3)
         inventory_img = np.transpose(inventory_img, (1, 0, 2, 3))
         obs["inventory"] = {}
         for i, inv_item in enumerate(inventory_img):
@@ -88,7 +89,7 @@ class Minecraft(gym.Env):
         for key in self._block_map:
             if self._block_map[key][0]:
                 x, y, z = key
-                img = self._block_map[key][1].copy().reshape(-1) / 255.0
+                img = self._block_map[key][1].copy().reshape(-1)
                 east_exists = self._block_exists(x+1, y, z)
                 south_exists = self._block_exists(x, y, z+1)
                 west_exists = self._block_exists(x-1, y, z)
@@ -104,7 +105,7 @@ class Minecraft(gym.Env):
                     north_exists = 2
                 elif (x, y+1, z) == self.agent_pos:
                     top_exists = 2
-                neighbors = np.array([east_exists, south_exists, west_exists, north_exists, top_exists], dtype=float)
+                neighbors = np.array([east_exists, south_exists, west_exists, north_exists, top_exists], dtype=np.uint8)
                 obs["objects"][key] = np.concatenate([img, neighbors])
         obs["dimensions"] = {"inventory": 32*32*3, "agent": 32*32*3, "objects": 32*32*3+5}
         return obs
@@ -140,7 +141,7 @@ class Minecraft(gym.Env):
         return int(np.floor(pos[0])), int(np.floor(pos[1])), int(np.floor(pos[2]))
 
     @property
-    def last_targeted_block(self) -> tuple[int, int, int]:
+    def last_targeted_block(self) -> Optional[tuple[int, int, int]]:
         return self._last_targeted_block
 
     @property
@@ -157,7 +158,7 @@ class Minecraft(gym.Env):
         self._t = 0
         return self.observation
 
-    def step(self, action) -> tuple[np.ndarray, float, bool, dict]:
+    def step(self, action) -> tuple[dict, float, bool, dict]:
         action_type, (action_args, object_args) = action
         if action_type == "teleport":
             x, y, z = object_args[0]
@@ -592,6 +593,19 @@ class MinecraftDataset(UnorderedDataset):
         "top": 9
     }
     ITEMS_TO_IDX = {x: i for i, x in enumerate(ALL_ITEMS, 10)}
+
+    def __getitem__(self, idx):
+        x, x_, key_order = dict_to_transition(self._state[idx], self._next_state[idx])
+        x = self._normalize_imgs(x)
+        x_ = self._normalize_imgs(x_)
+        a = self._actions_to_label(self._action[idx], key_order)
+        return x, a, x_
+    
+    def _normalize_imgs(self, x):
+        x["agent"] = x["agent"] / 255.0
+        x["inventory"] = x["inventory"] / 255.0
+        x["objects"][..., :3072] = x["objects"][..., :3072] / 255.0
+        return x
 
     @staticmethod
     def _actions_to_label(action, key_order):
