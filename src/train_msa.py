@@ -22,10 +22,13 @@ def main(args):
     loader = torch.utils.data.DataLoader(dataset, batch_size=args.batch_size, shuffle=True,
                                          collate_fn=dataset.collate_fn)
 
-    msa = MarkovStateAbstraction(input_dims=[("objects", 786)],
-                                 action_dim=4,
+    msa = MarkovStateAbstraction(input_dims=[("agent", 3072),
+                                             ("inventory", 3072),
+                                             ("objects", 3077)],
+                                 action_dim=402,
                                  n_hidden=args.n_hidden,
-                                 n_latent=args.n_latent).to(args.device)
+                                 n_latent=args.n_latent,
+                                 action_classification_type="sigmoid").to(args.device)
     optimizer = torch.optim.Adam(msa.parameters(), lr=args.lr)
 
     for e in range(args.epoch):
@@ -36,7 +39,7 @@ def main(args):
             n = x["objects"].shape[0]
             x_n, _, _ = dataset.sample(n)
             inv_loss, density_loss, reg_loss = msa.loss(x, x_, x_n, a)
-            loss = inv_loss + density_loss + 0.01*reg_loss
+            loss = inv_loss + density_loss  # + 0.01*reg_loss
 
             optimizer.zero_grad()
             loss.backward()
