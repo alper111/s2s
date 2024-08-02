@@ -2,9 +2,11 @@ import torch
 
 
 class MarkovStateAbstraction(torch.nn.Module):
-    def __init__(self, input_dims: tuple, action_dim: int, n_hidden: int, n_latent: int):
+    def __init__(self, input_dims: list[tuple], action_dim: int, n_hidden: int, n_latent: int,
+                 action_classification_type: str = "softmax"):
         super(MarkovStateAbstraction, self).__init__()
         self._order = [x[0] for x in input_dims]
+        self._cls_type = action_classification_type
         self.projection = torch.nn.ModuleDict(
             {key: torch.nn.Sequential(
                 torch.nn.Linear(value, n_hidden),
@@ -18,21 +20,23 @@ class MarkovStateAbstraction(torch.nn.Module):
             torch.nn.Linear(n_hidden, n_hidden),
             torch.nn.ReLU(),
             torch.nn.Linear(n_hidden, n_latent),
-            GumbelSigmoidLayer()
         )
+
         self.pre_attention = torch.nn.Sequential(
-            torch.nn.Linear(n_latent, n_hidden),
+            torch.nn.Linear(2*n_latent, n_hidden),
             torch.nn.ReLU()
         )
         _att_layers = torch.nn.TransformerEncoderLayer(d_model=n_hidden, nhead=4, batch_first=True)
         self.attention = torch.nn.TransformerEncoder(_att_layers, num_layers=4)
-        self.inverse = torch.nn.Sequential(
-            torch.nn.Linear(2*n_hidden, n_hidden),
+        self.ctx_embedding = torch.nn.Embedding(2, n_hidden)
+
+        self.inverse_fc = torch.nn.Sequential(
+            torch.nn.Linear(n_hidden, n_hidden),
             torch.nn.ReLU(),
             torch.nn.Linear(n_hidden, action_dim)
         )
         self.density_fc = torch.nn.Sequential(
-            torch.nn.Linear(2*n_hidden, n_hidden),
+            torch.nn.Linear(n_hidden, n_hidden),
             torch.nn.ReLU(),
             torch.nn.Linear(n_hidden, 1)
         )
@@ -41,43 +45,67 @@ class MarkovStateAbstraction(torch.nn.Module):
     def device(self):
         return next(self.parameters()).device
 
-    def inverse_forward(self, z, z_):
-        z_all = torch.cat([z, z_], dim=-1)
-        a_logits = self.inverse(z_all)
+    def inverse_forward(self, h):
+        a_logits = self.inverse_fc(h)
         return a_logits
 
-    def density_forward(self, z, z_, z_n):
-        z_pos = torch.cat([z, z_], dim=-1)
-        z_neg = torch.cat([z, z_n], dim=-1)
-        z_all = torch.cat([z_pos, z_neg], dim=0)
-        y_logits = self.density_fc(z_all).squeeze()
-        return y_logits
+    def density_forward(self, h):
+        y_logits = self.density_fc(h)
+        return y_logits[:, 0, 0]
 
     def encode(self, x):
         return {k: self.feature(self.projection[k](x[k].to(self.device))) for k in x if k != "masks"}
 
-    def aggregate(self, z, pad_mask):
+    def attn_forward(self, z, z_, pad_mask):
+        # flatten dictionaries to tensors
         zf = self._flatten(z)
+        zf_ = self._flatten(z_)
+        # combine state and next state tensors
+        n_pad = zf.shape[1] - zf_.shape[1]
+        if n_pad > 0:
+            zf_ = torch.cat([zf_, torch.zeros(zf_.shape[0], n_pad, zf_.shape[2], device=self.device)], dim=1)
+        elif n_pad < 0:
+            zf_ = zf_[:, :zf.shape[1], :]
+        z_cat = torch.cat([zf, zf_], dim=-1)
+        z_proj = self.pre_attention(z_cat)
+        n_batch, n_token, _ = z_proj.shape
+        obj_idx = torch.zeros(n_batch, n_token, dtype=torch.long, device=self.device)
+        cls_idx = torch.ones(n_batch, 1, dtype=torch.long, device=self.device)
+        # add classification token to the beginning of the sequence
+        z_proj = z_proj + self.ctx_embedding(obj_idx)
+        z_proj = torch.cat([self.ctx_embedding(cls_idx), z_proj], dim=1)
+        # pad mask to account for classification token
         mask = self._flatten(pad_mask).to(self.device)
-        z_proj = self.pre_attention(zf)
-        z_agg = self.attention(z_proj, src_key_padding_mask=~mask)
-        z_agg = (z_agg * mask.unsqueeze(2)).sum(dim=1) / mask.sum(dim=1).unsqueeze(1)
-        return z_agg
+        mask = torch.cat([torch.ones(n_batch, 1, dtype=torch.bool, device=self.device), mask], dim=1)
+        # apply attention
+        h = self.attention(z_proj, src_key_padding_mask=~mask)
+        # just to ensure there is no accidental backprop
+        h = h * mask.unsqueeze(2)
+        return h
 
     def forward(self, x):
         z = self.encode(x)
-        z_agg = self.aggregate(z, x["masks"])
-        return z, z_agg
+        return z
 
-    def inverse_loss(self, z, z_, a):
-        a_logits = self.inverse_forward(z, z_)
-        loss = torch.nn.functional.cross_entropy(a_logits, a.to(self.device))
+    def inverse_loss(self, h, a, mask):
+        m = self._flatten(mask).to(self.device)
+        a_logits = self.inverse_forward(h)
+        if self._cls_type == "softmax":
+            a_logits = a_logits.permute(0, 2, 1)
+            loss = torch.nn.functional.cross_entropy(a_logits, a.to(self.device), reduction="none")
+        elif self._cls_type == "sigmoid":
+            loss = torch.nn.functional.binary_cross_entropy_with_logits(a_logits, a.to(self.device), reduction="none")
+            loss = loss.sum(dim=-1)
+        else:
+            raise ValueError(f"Unknown action classification type: {self._cls_type}")
+        loss = (loss * m).sum() / m.sum()
         return loss
 
-    def density_loss(self, z, z_, z_n):
-        n_batch = z.shape[0]
-        y_logits = self.density_forward(z, z_, z_n)
+    def density_loss(self, h_pos, h_neg):
+        n_batch = h_pos.shape[0]
+        h = torch.cat([h_pos, h_neg], dim=0)
         y = torch.cat([torch.ones(n_batch), torch.zeros(n_batch)], dim=0).to(self.device)
+        y_logits = self.density_forward(h)
         return torch.nn.functional.binary_cross_entropy_with_logits(y_logits, y)
 
     def regularization(self, z, z_):
@@ -87,11 +115,16 @@ class MarkovStateAbstraction(torch.nn.Module):
         return l1_loss
 
     def loss(self, x, x_, x_neg, a):
-        z, z_agg = self.forward(x)
-        z_, z_agg_ = self.forward(x_)
-        _, zn_agg = self.forward(x_neg)
-        inv_loss = self.inverse_loss(z_agg, z_agg_, a)
-        density_loss = self.density_loss(z_agg, z_agg_, zn_agg)
+        z = self.forward(x)
+        z_ = self.forward(x_)
+        z_neg = self.forward(x_neg)
+
+        h_pos = self.attn_forward(z, z_, x["masks"])
+        # we probably need harder negative examples
+        h_neg = self.attn_forward(z, z_neg, x["masks"])
+
+        inv_loss = self.inverse_loss(h_pos[:, 1:], a, x["masks"])
+        density_loss = self.density_loss(h_pos, h_neg)
         regularization = self.regularization(z, z_)
         return inv_loss, density_loss, regularization
 
