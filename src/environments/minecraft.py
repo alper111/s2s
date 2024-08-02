@@ -600,7 +600,7 @@ class MinecraftDataset(UnorderedDataset):
         x_ = self._normalize_imgs(x_)
         a = self._actions_to_label(self._action[idx], key_order)
         return x, a, x_
-    
+
     def _normalize_imgs(self, x):
         x["agent"] = x["agent"] / 255.0
         x["inventory"] = x["inventory"] / 255.0
