@@ -122,9 +122,11 @@ class MarkovStateAbstraction(torch.nn.Module):
     def inverse_loss(self, h, a, mask):
         a_logits = self.inverse_forward(h)
         if self._cls_type == "softmax":
+            assert a.ndim == 2
             a_logits = a_logits.permute(0, 2, 1)
             loss = torch.nn.functional.cross_entropy(a_logits, a.to(self.device), reduction="none")
         elif self._cls_type == "sigmoid":
+            assert a.ndim == 3
             loss = torch.nn.functional.binary_cross_entropy_with_logits(a_logits, a.to(self.device), reduction="none")
             loss = loss.sum(dim=-1)
         else:
