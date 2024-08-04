@@ -621,9 +621,9 @@ class MinecraftDataset(UnorderedDataset):
         target = action[1][1]
         if len(target) != 0:
             target = target[0]
-            target = key_order.index(target)
+            target = key_order.index(target) + 1
         else:
             target = 0
-        a = torch.zeros(len(key_order), 402, dtype=torch.float32)
+        a = torch.zeros(len(key_order)+1, 402, dtype=torch.float32)
         a[target] = a_
         return a
