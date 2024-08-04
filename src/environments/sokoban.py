@@ -405,4 +405,6 @@ class SokobanDataset(UnorderedDataset):
 
     @staticmethod
     def _actions_to_label(action, key_order):
-        return torch.tensor(action, dtype=torch.long)
+        a = torch.zeros(len(key_order)+1, dtype=torch.long)
+        a[0] = action
+        return a
