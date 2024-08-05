@@ -21,7 +21,7 @@ def main(args):
         raise ValueError
 
     loader = torch.utils.data.DataLoader(dataset, batch_size=args.batch_size, shuffle=True,
-                                         collate_fn=dataset.collate_fn)
+                                         collate_fn=dataset.collate_fn, num_workers=8)
 
     msa = MarkovStateAbstraction(input_dims=[("agent", 3072),
                                              ("inventory", 3072),
