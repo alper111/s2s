@@ -126,18 +126,22 @@ class S2SDataset:
 
 
 class UnorderedDataset(torch.utils.data.Dataset):
-    def __init__(self, root_folder):
+    def __init__(self, root_folder: str, transform_action: bool = True):
         self._root_folder = root_folder
         self._state = np.load(os.path.join(root_folder, "state.npy"), allow_pickle=True)
         self._action = pickle.load(open(os.path.join(root_folder, "action.pkl"), "rb"))
         self._next_state = np.load(os.path.join(root_folder, "next_state.npy"), allow_pickle=True)
+        self._transform_action = transform_action
 
     def __len__(self):
         return len(self._state)
 
     def __getitem__(self, idx):
         x, x_, key_order = dict_to_transition(self._state[idx], self._next_state[idx])
-        a = self._actions_to_label(self._action[idx], key_order)
+        if self._transform_action:
+            a = self._actions_to_label(self._action[idx], key_order)
+        else:
+            a = self._action[idx]
         return x, a, x_
 
     def sample(self, n_samples):
@@ -170,10 +174,11 @@ class UnorderedDataset(torch.utils.data.Dataset):
             s_[k] = pad_sequence(s_[k], batch_first=True)
             s["masks"][k] = pad_sequence(s["masks"][k], batch_first=True)
             s_["masks"][k] = pad_sequence(s_["masks"][k], batch_first=True)
-        if a[0].ndim == 0:
-            a = torch.tensor(a)
-        else:
-            a = pad_sequence(a, batch_first=True)
+        if isinstance(a[0], torch.Tensor):
+            if a[0].ndim == 0:
+                a = torch.tensor(a)
+            else:
+                a = pad_sequence(a, batch_first=True)
         return s, a, s_
 
 
