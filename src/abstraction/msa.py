@@ -178,7 +178,7 @@ class MarkovStateAbstraction(torch.nn.Module):
 
         inv_loss = self.inverse_loss(h_action, a, a_mask)
         density_loss = self.density_loss(h_density, y_density)
-        regularization = self.regularization(z, z_)
+        regularization = self.regularization(z, z_[:, :n_pos])
         return inv_loss, density_loss, regularization
 
     def _flatten(self, x):
