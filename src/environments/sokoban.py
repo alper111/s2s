@@ -396,7 +396,10 @@ class SokobanDataset(UnorderedDataset):
         x, x_, key_order = dict_to_transition(self._state[idx], self._next_state[idx])
         x = self._normalize_imgs(x)
         x_ = self._normalize_imgs(x_)
-        a = self._actions_to_label(self._action[idx], key_order)
+        if self._transform_action:
+            a = self._actions_to_label(self._action[idx], key_order)
+        else:
+            a = self._action[idx]
         return x, a, x_
 
     def _normalize_imgs(self, x):
