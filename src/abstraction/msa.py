@@ -93,6 +93,8 @@ class MarkovStateAbstraction(torch.nn.Module):
                 f.append(out[i])
             f = torch.cat(f, dim=1)
             return_feats.append(f)
+        if n == 1:
+            return_feats = return_feats[0]
         return return_feats
 
     def attn_forward(self, z, zn, m, mn):
