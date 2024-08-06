@@ -1033,7 +1033,7 @@ class PDDLDomain:
             masked_obs = observation[factor.variables].reshape(1, -1)
             for p_i, idx in enumerate(group):
                 prop = self.vocabulary[idx]
-                scores[p_i] = prop.estimator._kde.score_samples(masked_obs)[0]
+                scores[p_i] = prop.estimator.score_samples(masked_obs)[0]
             active_symbols.append(self.vocabulary[group[np.argmax(scores)]])
         return active_symbols
 
