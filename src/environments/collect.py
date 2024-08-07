@@ -66,7 +66,10 @@ def collect(n: int, env: gym.Env, options: Optional[dict[str, Callable]] = None)
     return S2SDataset(state_arr, action_arr, reward_arr, next_state_arr, mask_arr)
 
 
-def collect_raw(n: int, env: gym.Env, options: Optional[dict[str, Callable]] = None, save_folder: str = "out") -> None:
+def collect_raw(n: int, env: gym.Env,
+                options: Optional[dict[str, Callable]] = None,
+                save_folder: str = "out",
+                extension: str = "") -> None:
     """
     Collects n samples from the environment and saves them to disk.
 
@@ -80,6 +83,8 @@ def collect_raw(n: int, env: gym.Env, options: Optional[dict[str, Callable]] = N
         Options to execute in the environment.
     save_folder: str, default="out"
         Folder to save the dataset.
+    extension: str, default=""
+        Extension to append to the save files.
     """
 
     state = []
@@ -115,7 +120,9 @@ def collect_raw(n: int, env: gym.Env, options: Optional[dict[str, Callable]] = N
     env.close()
 
     os.makedirs(save_folder, exist_ok=True)
-    np.save(os.path.join(save_folder, "state.npy"), np.stack(state))
-    pickle.dump(action, open(os.path.join(save_folder, "action.pkl"), "wb"))
-    np.save(os.path.join(save_folder, "reward.npy"), np.array(reward))
-    np.save(os.path.join(save_folder, "next_state.npy"), np.stack(next_state))
+    if extension != "":
+        extension = f"_{extension}"
+    np.save(os.path.join(save_folder, f"state{extension}.npy"), np.stack(state))
+    pickle.dump(action, open(os.path.join(save_folder, f"action{extension}.pkl"), "wb"))
+    np.save(os.path.join(save_folder, f"reward{extension}.npy"), np.array(reward))
+    np.save(os.path.join(save_folder, f"next_state{extension}.npy"), np.stack(next_state))
