@@ -14,6 +14,7 @@ if __name__ == "__main__":
     parser.add_argument("--env", type=str, help="The environment name")
     parser.add_argument("--n-samples", type=int, help="Number of samples")
     parser.add_argument("--max-steps", type=int, help="Maximum number of steps per episode")
+    parser.add_argument("--yaml", type=str, help="Path to the Minecraft environment yaml file")
     args = parser.parse_args()
 
     if args.env == "npuzzle":
@@ -21,7 +22,8 @@ if __name__ == "__main__":
     elif args.env == "sokoban":
         env = Sokoban(size=(4, 4), object_centric=True, max_crates=1, max_steps=args.max_steps)
     elif args.env == "minecraft":
-        world_config = yaml.safe_load(open("data/Build_Wall_Easy.yaml", "r"))
+        assert args.yaml is not None, "Please provide the yaml file for the Minecraft environment"
+        world_config = yaml.safe_load(open(args.yaml, "r"))
         env = Minecraft(world_config, max_steps=args.max_steps)
     else:
         raise ValueError
