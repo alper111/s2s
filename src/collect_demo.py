@@ -15,6 +15,7 @@ if __name__ == "__main__":
     parser.add_argument("--n-samples", type=int, help="Number of samples")
     parser.add_argument("--max-steps", type=int, help="Maximum number of steps per episode")
     parser.add_argument("--yaml", type=str, help="Path to the Minecraft environment yaml file")
+    parser.add_argument("--extension", default="", type=str, help="Extension to append to the save files")
     args = parser.parse_args()
 
     if args.env == "npuzzle":
@@ -29,4 +30,4 @@ if __name__ == "__main__":
         raise ValueError
 
     save_folder = os.path.join("data", args.env)
-    collect_raw(args.n_samples, env, save_folder=save_folder)
+    collect_raw(args.n_samples, env, save_folder=save_folder, extension=args.extension)
