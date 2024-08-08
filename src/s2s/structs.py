@@ -403,7 +403,8 @@ class Proposition:
     A predicate over one or more factors.
     """
 
-    def __init__(self, idx: int, name: str, kde: Optional[KernelDensityEstimator]):
+    def __init__(self, idx: int, name: str, estimator: Optional[DensityEstimator],
+                 parameters: Optional[list[(str, str)]] = None):
         """
         Create a new predicate.
 
@@ -413,8 +414,12 @@ class Proposition:
             The index of the predicate.
         name : str
             The name of the predicate.
-        kde : KernelDensityEstimator
+        estimator : DensityEstimator
             The density estimator that models the predicate.
+        parameters : list[(str, str)], optional
+            A list of (name, type) tuples that represent the
+            parameters of the predicate. The type is None if the
+            argument does not have a type.
 
         Returns
         -------
@@ -422,12 +427,13 @@ class Proposition:
         """
         self._idx = idx
         self._name = name
-        self._kde = kde
+        self._estimator = estimator
+        self._parameters = parameters
         self.sign = 1  # whether true or the negation of the predicate
 
     @property
-    def estimator(self) -> Optional[KernelDensityEstimator]:
-        return self._kde
+    def estimator(self) -> Optional[DensityEstimator]:
+        return self._estimator
 
     @property
     def name(self) -> str:
@@ -438,18 +444,22 @@ class Proposition:
         return self._idx
 
     @property
+    def parameters(self) -> list[(str, str)]:
+        return self._parameters
+
+    @property
     def factors(self) -> list[Factor]:
-        # assert isinstance(self._kde, KernelDensityEstimator)
-        return self._kde.factors
+        assert isinstance(self.estimator, DensityEstimator)
+        return self.estimator.factors
 
     @property
     def variables(self) -> list[int]:
-        # assert isinstance(self._kde, KernelDensityEstimator)
-        return self._kde.variables
+        assert isinstance(self.estimator, DensityEstimator)
+        return self.estimator.variables
 
     def sample(self, n_samples) -> np.ndarray:
-        # assert isinstance(self._kde, KernelDensityEstimator)
-        return self._kde.sample(n_samples)
+        assert isinstance(self.estimatorl, DensityEstimator)
+        return self.estimator.sample(n_samples)
 
     def is_grounded(self) -> bool:
         return False
@@ -465,16 +475,52 @@ class Proposition:
         clone.sign *= -1
         return clone
 
+    def substitute(self, parameters: list[tuple[str, str]]) -> 'Proposition':
+        """
+        Substitute the parameters of the predicate with the given parameters.
+
+        Parameters
+        ----------
+        parameters : list[tuple[str, str]]
+            A list of (name, type) tuples that represent the
+            parameters of the predicate. The type is None if the
+            argument does not have a type.
+
+        Returns
+        -------
+        new_prop : Proposition
+            The new proposition with the substituted parameters.
+        """
+        assert self.parameters is not None, "Predicate has no parameters."
+        clone = copy.copy(self)
+        clone._parameters = parameters
+        return clone
+
     def __repr__(self) -> str:
         return self.__str__()
 
     def __str__(self):
+        if self.parameters is not None:
+            prop_str = f"{self.name}"
+            for p in self.parameters:
+                prop_str += f" ?{p[0]}"
+                if p[1] is not None:
+                    prop_str += f" - {p[1]}"
+        else:
+            prop_str = self.name
+
         if self.sign < 0:
-            return 'not ({})'.format(self.name)
-        return self.name
+            prop_str = f"not ({prop_str})"
+        return prop_str
 
     def __hash__(self):
-        return hash(self._idx)
+        idx = (self._idx,)
+        if self._parameters is not None:
+            idx += tuple(self._parameters)
+        return hash(idx)
+
+    def __eq__(self, other):
+        return hash(self) == hash(other)
 
     @staticmethod
     def not_failed():
