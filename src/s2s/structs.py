@@ -560,7 +560,7 @@ class UniquePredicateList:
     def density_type(self):
         return self._density_type
 
-    def append(self, data: np.ndarray, factors: list[Factor]) -> Proposition:
+    def append(self, data: np.ndarray, factors: list[Factor], parameters: list[tuple[str, str]] = None) -> Proposition:
         """
         Adds a predicate to the predicate list. If the predicate covers multiple factors,
         all possible combinations of projections are added to the vocabulary as well.
@@ -571,15 +571,19 @@ class UniquePredicateList:
             The data on which predicates are fit.
         factors : list[Factor]
             Factors to be modeled.
+        parameters : list[tuple[str, str]], optional
+            A list of (name, type) tuples that represent the
+            parameters of the predicate. The type is None if the
+            argument
 
         Returns
         -------
         base_predicate : Proposition
             The newly created predicate for the given set of factors.
         """
-        if self._density_type == "kde":
+        if self.density_type == "kde":
             item = KernelDensityEstimator(factors)
-        elif self._density_type == "knn":
+        elif self.density_type == "knn":
             item = KNNDensityEstimator(factors)
         item.fit(data)
 
@@ -598,10 +602,12 @@ class UniquePredicateList:
                     # add new samples to the existing estimator
                     new_set = np.concatenate((predicate.estimator._samples, estimator._samples), axis=0)
                     predicate.estimator.fit(new_set, masked=True)
+                if parameters is not None:
+                    predicate = predicate.substitute(parameters)
             else:
                 # create a new predicate for this estimator and add it to the vocabulary
                 idx = len(self._list)
-                predicate = Proposition(idx, f'symbol_{idx}', estimator)
+                predicate = Proposition(idx, f'symbol_{idx}', estimator, parameters)
                 self._list.append(predicate)
                 self._projections.append({})
                 # if there are remaining factors to be projected, add them to the queue
