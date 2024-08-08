@@ -141,21 +141,19 @@ def build_schemata(vocabulary: UniquePredicateList,
         eff = eff_props[key]
         if len(eff) == 0:
             continue
-        action_schema = ActionSchema(f"a_{key[0]}_{key[1]}")
-        action_schema = create_action_schema(action_schema, vocabulary, pre, eff)
+        action_schema = create_action_schema(f"a{key[0]}_p{key[1]}", vocabulary, pre, eff)
         schemata.append(action_schema)
     return schemata
 
 
-def create_action_schema(action_schema: ActionSchema, vocabulary: UniquePredicateList, pre_prop: list[Proposition],
-                         eff_prop: list[Proposition]) -> ActionSchema:
+def create_action_schema(name: str, vocabulary: UniquePredicateList, pre_prop: list[Proposition],
     """
     Create an action schema from the given preconditions and effects.
 
     Parameters
     ----------
-        action_schema : ActionSchema
-            The action schema to add the preconditions and effects to.
+        name : str
+            The name of the action schema.
         vocabulary : UniquePredicateList
             The vocabulary of propositions.
         pre_prop : list[Proposition]
@@ -168,6 +166,7 @@ def create_action_schema(action_schema: ActionSchema, vocabulary: UniquePredicat
         action_schema : ActionSchema
             The action schema with the preconditions and effects added.
     """
+    action_schema = ActionSchema(name)
     action_schema.add_preconditions(pre_prop)
 
     # TODO: add probabilities...
