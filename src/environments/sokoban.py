@@ -10,6 +10,7 @@ import pygame
 from scipy.spatial.distance import cdist
 
 from s2s.structs import UnorderedDataset
+from s2s.helpers import dict_to_transition
 
 
 class Sokoban(gym.Env):
@@ -235,17 +236,17 @@ class Sokoban(gym.Env):
             for obj in objects:
                 bg, fg, i, j = obj
                 if bg is not None:
-                    arr = np.transpose(pygame.surfarray.array3d(bg)[:, :, 0], (1, 0)) / 255.0
-                    x = np.concatenate([arr.reshape(-1), [i], [j]])
+                    arr = np.transpose(pygame.surfarray.array3d(bg)[:, :, 0], (1, 0))
+                    x = np.concatenate([arr.reshape(-1), [i], [j]]).astype(np.uint8)
                     entities.append(x)
                 if fg is not None:
-                    arr = np.transpose(pygame.surfarray.array3d(fg)[:, :, 0], (1, 0)) / 255.0
-                    x = np.concatenate([arr.reshape(-1), [i], [j]])
+                    arr = np.transpose(pygame.surfarray.array3d(fg)[:, :, 0], (1, 0))
+                    x = np.concatenate([arr.reshape(-1), [i], [j]]).astype(np.uint8)
                     entities.append(x)
             entities = np.stack(entities)
             return entities
         else:
-            return np.transpose(pygame.surfarray.array3d(canvas)[:, :, 0], (1, 0)) / 255.0
+            return np.transpose(pygame.surfarray.array3d(canvas)[:, :, 0], (1, 0)).astype(np.uint8)
 
     def _render_tiles(self) -> list[tuple[Optional[pygame.Surface], Optional[pygame.Surface], int, int]]:
         objects = []
@@ -340,7 +341,7 @@ class Sokoban(gym.Env):
         # e.g., maybe with something like the Hungarian algorithm
         feat, _ = state[:, :self._feat_dim], state[:, self._feat_dim:]
         feat_n, _ = next_state[:, :self._feat_dim], next_state[:, self._feat_dim:]
-        dists = cdist(feat, feat_n)
+        dists = cdist(feat.astype(float) / 255.0, feat_n.astype(float) / 255.0)
         indices = np.argmin(dists, axis=-1)
         return indices
 
@@ -391,6 +392,22 @@ class Sokoban(gym.Env):
 
 
 class SokobanDataset(UnorderedDataset):
+    def __getitem__(self, idx):
+        x, x_, key_order = dict_to_transition(self._state[idx], self._next_state[idx])
+        x = self._normalize_imgs(x)
+        x_ = self._normalize_imgs(x_)
+        if self._transform_action:
+            a = self._actions_to_label(self._action[idx], key_order)
+        else:
+            a = self._action[idx]
+        return x, a, x_
+
+    def _normalize_imgs(self, x):
+        x["objects"][..., :1024] = x["objects"][..., :1024] / 255.0
+        return x
+
     @staticmethod
     def _actions_to_label(action, key_order):
-        return torch.tensor(action, dtype=torch.long)
+        a = torch.zeros(len(key_order)+1, dtype=torch.long)
+        a[0] = action
+        return a

@@ -598,7 +598,10 @@ class MinecraftDataset(UnorderedDataset):
         x, x_, key_order = dict_to_transition(self._state[idx], self._next_state[idx])
         x = self._normalize_imgs(x)
         x_ = self._normalize_imgs(x_)
-        a = self._actions_to_label(self._action[idx], key_order)
+        if self._transform_action:
+            a = self._actions_to_label(self._action[idx], key_order)
+        else:
+            a = self._action[idx]
         return x, a, x_
 
     def _normalize_imgs(self, x):
@@ -621,9 +624,9 @@ class MinecraftDataset(UnorderedDataset):
         target = action[1][1]
         if len(target) != 0:
             target = target[0]
-            target = key_order.index(target)
+            target = key_order.index(target) + 1
         else:
             target = 0
-        a = torch.zeros(len(key_order), 402, dtype=torch.float32)
+        a = torch.zeros(len(key_order)+1, 402, dtype=torch.float32)
         a[target] = a_
         return a
