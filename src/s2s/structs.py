@@ -182,9 +182,51 @@ class UnorderedDataset(torch.utils.data.Dataset):
         return s, a, s_
 
 
-class KernelDensityEstimator:
+class DensityEstimator:
     """
-    A density estimator that models a distribution over a factor (a set of low-level states).
+    Density estimator abstract class that models a distribution over
+    one or more factors (a set of low-level states).
+    """
+
+    def __init__(self, factors: list[Factor]):
+        self._factors = factors
+
+    def fit(self, X: np.ndarray, **kwargs) -> None:
+        pass
+
+    def score_samples(self, X: np.ndarray) -> np.ndarray:
+        pass
+
+    @property
+    def factors(self) -> list[Factor]:
+        return self._factors
+
+    @property
+    def variables(self) -> list[int]:
+        variables = []
+        for f in self.factors:
+            variables.extend(f.variables)
+        return variables
+
+    @property
+    def factor_indices(self) -> dict[Factor, int]:
+        indices = {}
+        it = 0
+        for f in self.factors:
+            n_vars = len(f.variables)
+            rng = list(range(it, n_vars))
+            indices[f] = rng
+            it += len(f)
+        return indices
+
+    def sample(self, n_samples=100) -> np.ndarray:
+        pass
+
+
+class KernelDensityEstimator(DensityEstimator):
+    """
+    Kernel density estimator that models a distribution over one or more
+    factors (a set of low-level states).
     """
 
     def __init__(self, factors: list[Factor]):
@@ -200,7 +242,7 @@ class KernelDensityEstimator:
         -------
         None
         """
-        self._factors = factors
+        super().__init__(factors)
         self._kde: Optional[KernelDensity] = None
 
     def fit(self, X: np.ndarray, **kwargs) -> None:
@@ -245,28 +287,6 @@ class KernelDensityEstimator:
         """
         return self._kde.score_samples(X)
 
-    @property
-    def factors(self) -> list[Factor]:
-        return self._factors
-
-    @property
-    def variables(self) -> list[int]:
-        variables = []
-        for f in self.factors:
-            variables.extend(f.variables)
-        return variables
-
-    @property
-    def factor_indices(self) -> dict[Factor, int]:
-        indices = {}
-        it = 0
-        for f in self.factors:
-            n_vars = len(f.variables)
-            rng = list(range(it, n_vars))
-            indices[f] = rng
-            it += len(f)
-        return indices
-
     def sample(self, n_samples=100) -> np.ndarray:
         """
         Sample data from the density estimator.
@@ -287,41 +307,14 @@ class KernelDensityEstimator:
             data = np.reshape(data, (data.shape[0], 1))
         return data
 
-    def integrate_out(self, factor_list: list[Factor], **kwargs) -> 'KernelDensityEstimator':
-        """
-        Integrate out the given factors from the distribution.
 
-        Parameters
-        ----------
-        factor_list : list[Factor]
-            A list of factors to be marginalized out from the distribution.
-
-        Returns
-        -------
-        KernelDensityEstimator
-            A new distribution equal to the original distribution with the specified factors marginalized out.
-        """
-        rem_factors = []
-        rem_factor_indices = []
-        for f in self.factors:
-            if f not in factor_list:
-                rem_factors.append(f)
-                rem_factor_indices.extend(self.factor_indices[f])
-        n_samples = kwargs.get('estimator_samples', 100)
-        new_samples = self.sample(n_samples)[:, rem_factor_indices]
-        kde = KernelDensityEstimator(factors=rem_factors)
-        kwargs['masked'] = True  # the data has already been masked
-        kde.fit(new_samples, **kwargs)
-        return kde
-
-
-class KNNDensityEstimator:
+class KNNDensityEstimator(DensityEstimator):
     """
-    A density estimator that models a distribution over a factor (a set of low-level states)
-    with a k-nearest neighbors approach.
+    A density estimator that models a distribution over one or more
+    factors (a set of low-level states) with a k-nearest neighbors approach.
     """
 
-    def __init__(self, factors: list[Factor]):
+    def __init__(self, factors: list[Factor], k: int = 5):
         """
         Initialize a new estimator.
 
@@ -329,14 +322,16 @@ class KNNDensityEstimator:
         ----------
         factors : list[Factor]
             The factors that the estimator models.
+        k : int, optional
+            The number of nearest neighbors to consider. Default is 5.
 
         Returns
         -------
         None
         """
-        self._factors = factors
+        super().__init__(factors)
         self._samples: Optional[np.ndarray] = None
-        self._k = 5
+        self._k = k
 
     def fit(self, X: np.ndarray, **kwargs) -> None:
         """
@@ -381,28 +376,6 @@ class KNNDensityEstimator:
         log_prob = -np.mean(knn_dists, axis=1)
         return log_prob
 
-    @property
-    def factors(self) -> list[Factor]:
-        return self._factors
-
-    @property
-    def variables(self) -> list[int]:
-        variables = []
-        for f in self.factors:
-            variables.extend(f.variables)
-        return variables
-
-    @property
-    def factor_indices(self) -> dict[Factor, int]:
-        indices = {}
-        it = 0
-        for f in self.factors:
-            n_vars = len(f.variables)
-            rng = list(range(it, n_vars))
-            indices[f] = rng
-            it += len(f)
-        return indices
-
     def sample(self, n_samples=100) -> np.ndarray:
         """
         Sample data from the density estimator.
@@ -423,33 +396,6 @@ class KNNDensityEstimator:
         if data.ndim == 1:  # ensure always shape of (N X D)
             data = np.reshape(data, (data.shape[0], 1))
         return data
-
-    # def integrate_out(self, factor_list: list[Factor], **kwargs) -> 'KernelDensityEstimator':
-    #     """
-    #     Integrate out the given factors from the distribution.
-
-    #     Parameters
-    #     ----------
-    #     factor_list : list[Factor]
-    #         A list of factors to be marginalized out from the distribution.
-
-    #     Returns
-    #     -------
-    #     KernelDensityEstimator
-    #         A new distribution equal to the original distribution with the specified factors marginalized out.
-    #     """
-    #     rem_factors = []
-    #     rem_factor_indices = []
-    #     for f in self.factors:
-    #         if f not in factor_list:
-    #             rem_factors.append(f)
-    #             rem_factor_indices.extend(self.factor_indices[f])
-    #     n_samples = kwargs.get('estimator_samples', 100)
-    #     new_samples = self.sample(n_samples)[:, rem_factor_indices]
-    #     kde = KernelDensityEstimator(factors=rem_factors)
-    #     kwargs['masked'] = True  # the data has already been masked
-    #     kde.fit(new_samples, **kwargs)
-    #     return kde
 
 
 class Proposition:
