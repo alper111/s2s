@@ -47,15 +47,18 @@ def build_vocabulary(partitions: dict[tuple[int, int], S2SDataset], factors: lis
     # first add the factors to the partitions (mutates partitions!)
     add_factors_to_partitions(partitions, factors, threshold=0.9)
 
+    # create effect symbols
     for key in partitions:
         partition_k = partitions[key]
         vocabulary, preds = create_effect_clause(vocabulary, partition_k)
-        n_pred = len(preds) if not partition_k.is_object_factored else sum([len(x) for x in preds])
-        logger.info(f"Processed Eff({key[0]}-{key[1]}); {n_pred} predicates found.")
+        logger.info(f"Processed Eff({key[0]}-{key[1]}); {len(preds)} predicates found.")
         eff_props[key] = preds
 
+    # compute symbols over factors that are mutually exclusive.
+    # important: this assumes the partition semantics, not distribution!
     vocabulary.fill_mutex_groups(factors)
 
+    # learn symbols for constant factors in case we need them for preconditions
     for f_i, factor in enumerate(vocabulary.mutex_groups):
         group = vocabulary.mutex_groups[factor]
         # no effect changes this factor, but there might be preconditions that depend on this factor.
@@ -68,22 +71,19 @@ def build_vocabulary(partitions: dict[tuple[int, int], S2SDataset], factors: lis
                 partition_k = partitions[key]
                 if partition_k.is_object_factored:
                     for j in range(partition_k.n_objects):
-                        vocabulary.append(partition_k.state[:, j], [factor])
-                        # density = _create_factored_densities(partition_k.state[:, j], vocabulary, [factor])
-                        # vocabulary.append(density[0], group)
+                        vocabulary.append(partition_k.state[:, j], [factor], [("x", None)])
                 else:
                     vocabulary.append(partition_k.state, [factor])
-                    # density = _create_factored_densities(partition_k.state, vocabulary, [factor])
-                    # vocabulary.append(density[0], group)
             for i, pred in enumerate(vocabulary):
                 if pred.factors[0] == factor:
                     group.append(i)
 
     # now learn preconditions in terms of the vocabulary found in the previous step
+    # important: this part learns the most probably precondition and disregards others,
+    # possibly breaking the soundness, but makes it efficient!
     for key in partitions:
         x_pos = partitions[key].state
         n = len(x_pos)
-        # x_neg = []
         other_options = [o for o in partitions if o != key]
         pre_count = {}
         for _ in range(10):
@@ -98,26 +98,19 @@ def build_vocabulary(partitions: dict[tuple[int, int], S2SDataset], factors: lis
             x = np.concatenate([x_pos, x_neg])
             y = np.concatenate([np.ones(n), np.zeros(n)])
             pre = _compute_preconditions(x, y, vocabulary, delta=1e-8)
-            # TODO: this is specific to object-centric case.
-            # Create a type for lifted predicates, and get rid of this
-            # if else kind of thing.
-            for obj_j, prop in enumerate(pre):
-                if obj_j not in pre_count:
-                    pre_count[obj_j] = {}
-                for p_i in prop:
-                    if p_i not in pre_count[obj_j]:
-                        pre_count[obj_j][p_i] = 0
-                    pre_count[obj_j][p_i] += 1
+            # count the number of times each proposition is selected
+            for i, prop in enumerate(pre):
+                if prop not in pre_count:
+                    pre_count[prop] = 0
+                pre_count[prop] += 1
+
         pre = []
-        for obj_j in sorted(pre_count):
-            pre.append([])
-            for prop in pre_count[obj_j]:
-                if pre_count[obj_j][prop] > 5:
-                    pre[obj_j].append(prop)
+        for prop in pre_count:
+            if pre_count[prop] > 8:
+                pre.append(prop)
 
         pre_props[key] = pre
-        n_pred = len(pre) if not partitions[key].is_object_factored else sum([len(x) for x in pre])
-        logger.info(f"Processed Pre({key[0]}-{key[1]}); {n_pred} predicates found.")
+        logger.info(f"Processed Pre({key[0]}-{key[1]}); {len(pre)} predicates found.")
     return vocabulary, pre_props, eff_props
 
 
@@ -148,23 +141,14 @@ def build_schemata(vocabulary: UniquePredicateList,
         eff = eff_props[key]
         if len(eff) == 0:
             continue
-        object_factored = True if isinstance(eff[0], list) else False
         action_schema = ActionSchema(f"a_{key[0]}_{key[1]}")
-        if object_factored:
-            for j in range(len(pre)):
-                if len(eff) == 0:
-                    eff_j = []
-                else:
-                    eff_j = eff[j]
-                action_schema = create_action_schema(action_schema, vocabulary, pre[j], eff_j, f"obj{j}")
-        else:
-            action_schema = create_action_schema(action_schema, vocabulary, pre, eff)
+        action_schema = create_action_schema(action_schema, vocabulary, pre, eff)
         schemata.append(action_schema)
     return schemata
 
 
 def create_action_schema(action_schema: ActionSchema, vocabulary: UniquePredicateList, pre_prop: list[Proposition],
-                         eff_prop: list[Proposition], obj_name: str = "") -> ActionSchema:
+                         eff_prop: list[Proposition]) -> ActionSchema:
     """
     Create an action schema from the given preconditions and effects.
 
@@ -178,20 +162,13 @@ def create_action_schema(action_schema: ActionSchema, vocabulary: UniquePredicat
             The preconditions.
         eff_prop : list[Proposition]
             The effects.
-        obj_name : str
-            The name of the object.
 
     Returns
     -------
         action_schema : ActionSchema
             The action schema with the preconditions and effects added.
     """
-    # propositional case (i.e., no objects)
-    if obj_name == "":
-        action_schema.add_preconditions(pre_prop)
-    # object-centric version
-    else:
-        action_schema.add_obj_preconditions(obj_name, pre_prop)
+    action_schema.add_preconditions(pre_prop)
 
     # TODO: add probabilities...
     f_pre = set()
@@ -207,10 +184,7 @@ def create_action_schema(action_schema: ActionSchema, vocabulary: UniquePredicat
     eff_proj_pos = [vocabulary.project(x, list(f_eff)) for x in eff_proj_neg]
     eff_proj_neg = [x.negate() for x in eff_proj_neg]
 
-    if obj_name == "":
-        action_schema.add_effect(eff_prop + eff_proj_pos + eff_neg + eff_proj_neg, 1)
-    else:
-        action_schema.add_obj_effect(obj_name, eff_prop + eff_proj_pos + eff_neg + eff_proj_neg, 1)
+    action_schema.add_effects(eff_prop + eff_proj_pos + eff_neg + eff_proj_neg)
     return action_schema
 
 
@@ -241,10 +215,12 @@ def create_effect_clause(vocabulary: UniquePredicateList, partition: S2SDataset)
     if partition.is_object_factored:
         for i, obj_factors in enumerate(partition.factors):
             if len(obj_factors) == 0:
-                effect_clause.append([])
                 continue
-            densities = _create_factored_densities(partition.next_state[:, i], vocabulary, obj_factors)
-            effect_clause.append(densities)
+            densities = _create_factored_densities(partition.next_state[:, i], vocabulary, obj_factors,
+                                                   lifted=True)
+            for prop in densities:
+                prop = prop.substitute([(f"x{i}", None)])
+                effect_clause.append(prop)
     else:
         if len(partition.factors) != 0:
             densities = _create_factored_densities(partition.next_state, vocabulary, partition.factors)
@@ -327,10 +303,7 @@ def _compute_preconditions(x: np.ndarray, y: np.ndarray, vocabulary: UniquePredi
 
     # get the most frequent symbol for each factor
     mode, _ = stats.mode(pos_symbols, axis=0, keepdims=False)
-    if object_factored:
-        preds = [[] for _ in range(symbol_indices.shape[1])]
-    else:
-        preds = []
+    preds = []
 
     current_mask = np.ones(n, dtype=bool)
     last_score = 0.5
@@ -345,7 +318,8 @@ def _compute_preconditions(x: np.ndarray, y: np.ndarray, vocabulary: UniquePredi
                 score = np.mean(y[mask] == 1)
                 if score > (last_score + delta):
                     prop = vocabulary.get_by_index(f_i, sym)
-                    preds[j].append(prop)
+                    prop = prop.substitute([(f"x{j}", None)])
+                    preds.append(prop)
                     current_mask = mask
                     last_score = score
     else:
@@ -364,7 +338,8 @@ def _compute_preconditions(x: np.ndarray, y: np.ndarray, vocabulary: UniquePredi
     return preds
 
 
-def _create_factored_densities(data: np.ndarray, vocabulary: UniquePredicateList, factors: list[Factor]) \
+def _create_factored_densities(data: np.ndarray, vocabulary: UniquePredicateList,
+                               factors: list[Factor], lifted: bool = False) \
         -> list[KernelDensityEstimator]:
     """
     Create the factored densities from the given data.
@@ -386,11 +361,14 @@ def _create_factored_densities(data: np.ndarray, vocabulary: UniquePredicateList
     # use validation samples for independency tests
     n_val = max(int(len(data) * 0.1), 3)
     densities = []
-    dependency_groups = _compute_factor_dependencies(data[-n_val:], factors)
+    dependency_groups = _compute_factor_dependencies(data[-n_val:], factors, method="knn")
     _n_expected_symbol = sum([2**len(x)-1 for x in dependency_groups])
     logger.info(f"n_factors={len(factors)}, n_groups={len(dependency_groups)}, n_expected_symbol={_n_expected_symbol}")
     for group in dependency_groups:
-        predicate = vocabulary.append(data, list(group))
+        params = None
+        if lifted:
+            params = [("x", None)]
+        predicate = vocabulary.append(data, list(group), params)
         densities.append(predicate)
     return densities
 
