@@ -538,7 +538,7 @@ class UniquePredicateList:
     with duplicates.
     """
 
-    def __init__(self, comparator: Optional[Callable[[KernelDensityEstimator, KernelDensityEstimator], bool]] = None,
+    def __init__(self, comparator: Optional[Callable[[DensityEstimator, DensityEstimator], bool]] = None,
                  density_type="knn"):
         """
         Create a list data structure that ensures no duplicates are added to the list.
