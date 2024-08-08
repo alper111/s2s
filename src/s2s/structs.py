@@ -818,8 +818,6 @@ class ActionSchema:
         self.name = name.replace(' ', '-')
         self.preconditions = []
         self.effects = []
-        self.obj_preconditions = {}
-        self.obj_effects = defaultdict(list)
 
     def add_preconditions(self, predicates: list[Proposition]) -> None:
         """
@@ -836,26 +834,7 @@ class ActionSchema:
         """
         self.preconditions.extend(predicates)
 
-    def add_obj_preconditions(self, obj_idx: str, predicates: list[Proposition]) -> None:
-        """
-        Add object-specific preconditions to the action schema.
-
-        Parameters
-        ----------
-        obj_idx : str
-            The object index.
-        predicates : list[Proposition]
-            The preconditions to add.
-
-        Returns
-        -------
-        None
-        """
-        if obj_idx not in self.obj_preconditions:
-            self.obj_preconditions[obj_idx] = []
-        self.obj_preconditions[obj_idx].extend(predicates)
-
-    def add_effect(self, effect: list[Proposition], probability: float = 1) -> None:
+    def add_effects(self, effects: list[Proposition]) -> None:
         """
         Add effects to the action schema.
 
@@ -863,33 +842,12 @@ class ActionSchema:
         ----------
         effect : list[Proposition]
             The effects to add.
-        probability : float, optional
-            The probability of the effect. Default is 1.
 
         Returns
         -------
         None
         """
-        self.effects.append((probability, effect))
-
-    def add_obj_effect(self, obj_idx: str, effect: list[Proposition], probability: float = 1):
-        """
-        Add object-specific effects to the action schema.
-
-        Parameters
-        ----------
-        obj_idx : str
-            The object index.
-        effect : list[Proposition]
-            The effects to add.
-        probability : float, optional
-            The probability of the effect. Default is 1.
-
-        Returns
-        -------
-        None
-        """
-        self.obj_effects[obj_idx].append((probability, effect))
+        self.effects.extend(effects)
 
     def is_probabilistic(self):
         # TODO: no probabilistic effects for now
@@ -905,29 +863,21 @@ class ActionSchema:
         if len(self.preconditions) > 0:
             precondition += _proposition_to_str(self.preconditions)
         if len(self.effects) > 0:
-            effects = max(self.effects, key=lambda x: x[0])
-            effect += _proposition_to_str(effects[1], None)
+            effect += _proposition_to_str(self.effects)
+        params = []
+        for prop in self.preconditions + self.effects:
+            if prop.parameters is not None:
+                for param in prop.parameters:
+                    if param not in params:
+                        params.append(param)
+
         parameters = []
-        for name in self.obj_preconditions:
-            if len(self.obj_preconditions[name]) == 0:
-                continue
-            parameters.append(name)
-            if len(precondition) > 0:
-                precondition += " "
-            precondition += _proposition_to_str(self.obj_preconditions[name], name)
-
-        for name in self.obj_effects:
-            max_effect = max(self.obj_effects[name], key=lambda x: x[0])
-            if len(max_effect[1]) == 0:
-                continue
-
-            if name not in parameters:
-                parameters.append(name)
-            if len(effect) > 0:
-                effect += " "
-
-            effect += _proposition_to_str(max_effect[1], name)
-        parameters = " ".join([f"?{name}" for name in parameters])
+        for param in params:
+            if param[1] is not None:
+                parameters.append(f"?{param[0]} - {param[1]}")
+            else:
+                parameters.append(f"?{param[0]}")
+        parameters = " ".join(parameters)
 
         schema = f"(:action {self.name}\n" + \
                  f"\t:parameters ({parameters})\n" + \
@@ -936,27 +886,11 @@ class ActionSchema:
         return schema
 
 
-def _proposition_to_str(proposition: Union[Proposition, list[Proposition]], name: str = None) -> str:
+def _proposition_to_str(proposition: Union[Proposition, list[Proposition]]) -> str:
     if isinstance(proposition, Proposition):
-        prop = proposition.name
-        if name is not None:
-            prop = f"{prop} ?{name}"
-        if proposition.sign < 0:
-            return f"(not ({prop}))"
+        return f"({proposition})"
     elif isinstance(proposition, list):
-        if len(proposition) == 0:
-            return ""
-
-        props = []
-        for prop in proposition:
-            p = prop.name
-            if name is not None:
-                p = f"{p} ?{name}"
-            if prop.sign < 0:
-                props.append(f"(not ({p}))")
-            else:
-                props.append(f"({p})")
-        return " ".join(props)
+        return " ".join([f"({p})" for p in proposition])
 
 
 class PDDLDomain:
