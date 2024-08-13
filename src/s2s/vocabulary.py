@@ -1,10 +1,12 @@
 from itertools import chain, combinations
 from typing import Union
 import logging
+from copy import deepcopy
 
 import numpy as np
 from scipy import stats
 from scipy.spatial.distance import cdist
+from sklearn.tree import DecisionTreeClassifier, _tree
 
 from s2s.structs import (KernelDensityEstimator, KNNDensityEstimator, UniquePredicateList,
                          Factor, Proposition, ActionSchema, S2SDataset)
@@ -86,7 +88,9 @@ def build_vocabulary(partitions: dict[tuple[int, int], S2SDataset], factors: lis
         n = len(x_pos)
         other_options = [o for o in partitions if o != key]
         pre_count = {}
-        for _ in range(10):
+        fac_count = {}
+        k_cross = 20
+        for _ in range(k_cross):
             x_neg = []
             for _ in range(n):
                 j = np.random.randint(len(other_options))
@@ -96,17 +100,21 @@ def build_vocabulary(partitions: dict[tuple[int, int], S2SDataset], factors: lis
                 x_neg.append(sample_neg)
             x_neg = np.array(x_neg)
             x = np.concatenate([x_pos, x_neg])
-            y = np.concatenate([np.ones(n), np.zeros(n)])
-            pre = _compute_preconditions(x, y, vocabulary, delta=1e-8)
+            y = np.concatenate([np.ones(x_pos.shape[0]), np.zeros(x_neg.shape[0])])
+            pre = find_best_pre_symbols(x, y, vocabulary)
             # count the number of times each proposition is selected
             for i, prop in enumerate(pre):
                 if prop not in pre_count:
                     pre_count[prop] = 0
+                for f_i in prop.factors:
+                    if f_i not in fac_count:
+                        fac_count[f_i] = 0
+                    fac_count[f_i] += 1
                 pre_count[prop] += 1
 
         pre = []
         for prop in pre_count:
-            if pre_count[prop] > 8:
+            if pre_count[prop] >= k_cross * 0.8:
                 pre.append(prop)
 
         pre_props[key] = pre
@@ -270,8 +278,8 @@ def add_factors_to_partitions(partitions: dict[tuple[int, int], S2SDataset], fac
                     partition.factors.append(factor)
 
 
-def _compute_preconditions(x: np.ndarray, y: np.ndarray, vocabulary: UniquePredicateList,
-                           delta: float = 0.01) -> Union[list[Proposition], list[list[Proposition]]]:
+def find_best_pre_symbols(x: np.ndarray, y: np.ndarray, vocabulary: UniquePredicateList) \
+        -> Union[list[Proposition], list[list[Proposition]]]:
     """
     Compute the preconditions from the given data.
 
@@ -283,58 +291,135 @@ def _compute_preconditions(x: np.ndarray, y: np.ndarray, vocabulary: UniquePredi
             The labels.
         vocabulary : UniquePredicateList
             The vocabulary of propositions.
-        delta : float
-            The threshold for the factor selection.
 
     Returns
     -------
         preconditions : list[Proposition] | list[list[Proposition]]
             The preconditions.
     """
+    y = y.astype(int)
+    n = len(y) // 2
     symbol_indices = vocabulary.get_active_symbol_indices(x)
-    if symbol_indices.ndim == 3:
-        object_factored = True
-    else:
-        object_factored = False
+    tree = DecisionTreeClassifier()
+    tree.fit(symbol_indices, y)
+    pos_symbol_indices = symbol_indices[:n]
+    counts = tree.decision_path(pos_symbol_indices).toarray().sum(axis=0)
+    rules = _parse_tree(tree, counts)
+    rules = [r_i[1:] for r_i in rules if r_i[0][0] == 1 and r_i[0][1] > n*0.01]
+    symbols = {}
+    for r_i in rules:
+        mask = np.ones(symbol_indices.shape[0], dtype=bool)
+        feats = []
+        for decision in r_i:
+            feat, thresh, op = decision
+            if op == "<=":
+                mask &= symbol_indices[:, feat] <= thresh
+            else:
+                mask &= symbol_indices[:, feat] > thresh
+            feats.append(feat)
+        if not np.any(mask):
+            continue
+        samples = symbol_indices[mask]
+        mode, _ = stats.mode(samples, axis=0, keepdims=False)
+        for f_i in feats:
+            prop = vocabulary.get_by_index(f_i, int(mode[f_i]))
+            if prop not in symbols:
+                symbols[prop] = 0
+            symbols[prop] += 1
+    return list(symbols.keys())
 
-    n = symbol_indices.shape[0]
-    pos_symbols = symbol_indices[:n//2]
 
-    # get the most frequent symbol for each factor
-    mode, _ = stats.mode(pos_symbols, axis=0, keepdims=False)
-    preds = []
+def lift_vocabulary_and_schemata(vocabulary, schemata, vars_per_obj, max_objects):
+    types = find_typed_groups(schemata, vars_per_obj, max_objects)
+    lifted_vocabulary = UniquePredicateList(_knn_overlapping, density_type="knn")
+    lifted_schemata = []
+    lift_map = {}
+    for w in vocabulary:
+        objects = []
+        factors = []
+        prev_objects = []
+        for f_i in w.factors:
+            obj_idx = f_i.variables[0] // vars_per_obj
+            variables = [v_i % vars_per_obj for v_i in f_i.variables]
+            # for now, only works with KNNDensityEstimator
+            f = Factor(variables)
+            factors.append(f)
+            for t in types:
+                if (obj_idx in types[t]) and (obj_idx not in prev_objects):
+                    objects.append(t)
+                    prev_objects.append(obj_idx)
+                    break
+        if len(objects) != 0:
+            params = [("x", f"type{t}") for t in objects]
+        lifted_pred = lifted_vocabulary.append(w.estimator._samples, factors, params, masked=True)
+        lift_map[w] = lifted_pred
 
-    current_mask = np.ones(n, dtype=bool)
-    last_score = 0.5
-    if object_factored:
-        for j in range(symbol_indices.shape[1]):
-            for f_i in range(symbol_indices.shape[2]):
-                sym = int(mode[j, f_i])
-                mask = symbol_indices[:, j, f_i] == sym
-                mask = mask & current_mask
-                if not np.any(mask):
-                    continue
-                score = np.mean(y[mask] == 1)
-                if score > (last_score + delta):
-                    prop = vocabulary.get_by_index(f_i, sym)
-                    prop = prop.substitute([(f"x{j}", None)])
-                    preds.append(prop)
-                    current_mask = mask
-                    last_score = score
-    else:
-        for f_i in range(symbol_indices.shape[1]):
-            sym = int(mode[f_i])
-            mask = symbol_indices[:, f_i] == sym
-            mask = mask & current_mask
-            if not np.any(mask):
-                continue
-            score = np.mean(y[mask] == 1)
-            if score > (last_score + delta):
-                prop = vocabulary.get_by_index(f_i, sym)
-                preds.append(prop)
-                current_mask = mask
-                last_score = score
-    return preds
+    for rule in schemata:
+        lifted_rule = ActionSchema(rule.name)
+        obj_map = {}
+        i = 0
+        for p_i in rule.preconditions:
+            current_obj = p_i.variables[0] // vars_per_obj
+            if current_obj not in obj_map:
+                obj_map[current_obj] = i
+                i += 1
+            lifted_pred = deepcopy(lift_map[p_i])
+            lifted_pred.sign = p_i.sign
+            temp_params = lifted_pred.parameters
+            params = [(f"x{obj_map[current_obj]}", p[1]) for p in temp_params]
+            lifted_pred = lifted_pred.substitute(params)
+            lifted_rule.add_preconditions([lifted_pred])
+
+        for p_i in rule.effects:
+            current_obj = p_i.variables[0] // vars_per_obj
+            if current_obj not in obj_map:
+                obj_map[current_obj] = i
+                i += 1
+            lifted_pred = deepcopy(lift_map[p_i])
+            lifted_pred.sign = p_i.sign
+            temp_params = lifted_pred.parameters
+            params = [(f"x{obj_map[current_obj]}", p[1]) for p in temp_params]
+            lifted_pred = lifted_pred.substitute(params)
+            lifted_rule.add_effects([lifted_pred])
+        lifted_schemata.append(lifted_rule)
+    return lifted_vocabulary, lifted_schemata
+
+
+def find_typed_groups(schemata, vars_per_obj, n_max):
+    typed_groups = {}
+    options = {rule.name.split("_")[0] for rule in schemata}
+    profiles = {i: _get_effect_profile(options, i, schemata, vars_per_obj) for i in range(n_max)}
+    j = 0
+    for i in range(n_max):
+        for type_idx in typed_groups:
+            an_instance = typed_groups[type_idx][0]
+            if _is_profile_same(profiles[i], profiles[an_instance], vars_per_obj):
+                typed_groups[type_idx].append(i)
+                break
+        else:
+            typed_groups[j] = [i]
+            j += 1
+    return typed_groups
+
+
+def _parse_tree(tree, counts):
+    tree_ = tree.tree_
+
+    def recurse(node, rules):
+        if tree_.feature[node] != _tree.TREE_UNDEFINED:
+            left = rules.copy()
+            right = rules.copy()
+            left.append((tree_.feature[node], tree_.threshold[node], "<="))
+            right.append((tree_.feature[node], tree_.threshold[node], ">"))
+            rules_from_left = recurse(tree_.children_left[node], left)
+            rules_from_right = recurse(tree_.children_right[node], right)
+            rules = rules_from_left + rules_from_right
+            return rules
+        else:
+            leaf = rules.copy()
+            leaf.insert(0, (np.argmax(tree_.value[node][0]), counts[node]))
+            return [leaf]
+    return recurse(0, [])
 
 
 def _create_factored_densities(data: np.ndarray, vocabulary: UniquePredicateList,
@@ -583,3 +668,86 @@ def _knn_accuracy(x: np.ndarray, y: np.ndarray, k: int = 5, max_samples: int = 1
     x_acc = np.sum(x_decisions[:n_sample]) / n_sample
     y_acc = 1 - np.sum(x_decisions[n_sample:]) / n_sample
     return x_acc, y_acc
+
+
+def _get_option_effect(option, object_idx, schemata, vars_per_obj):
+    symbols = []
+    for rule in schemata:
+        rule_option = rule.name.split("_")[0]
+        if rule_option == option and rule.effects:
+            effects = []
+            for e_i in rule.effects:
+                if e_i.variables[0] // vars_per_obj == object_idx:
+                    if e_i.sign == 1:
+                        effects.append(e_i)
+            if len(effects) != 0:
+                symbols.append(effects)
+    return symbols
+
+
+def _get_effect_profile(options, object_idx, schemata, vars_per_obj):
+    effect_profile = {}
+    for option in options:
+        effect_profile[option] = _get_option_effect(option, object_idx, schemata, vars_per_obj)
+    return effect_profile
+
+
+def _is_profile_same(eff_profile1, eff_profile2, vars_per_obj):
+    if eff_profile1.keys() != eff_profile2.keys():
+        return False
+
+    for o in eff_profile1.keys():
+        # they should have the same number of subgoals
+        if len(eff_profile1[o]) != len(eff_profile2[o]):
+            return False
+
+        subgoals1 = eff_profile1[o]
+        subgoals2 = eff_profile2[o]
+        is_used1 = np.zeros(len(subgoals1), dtype=bool)
+        is_used2 = np.zeros(len(subgoals2), dtype=bool)
+        for i, sg1 in enumerate(subgoals1):
+            available_indices = np.where(~is_used2)[0]
+            if len(available_indices) == 0:
+                return False
+
+            for j in available_indices:
+                sg2 = subgoals2[j]
+                if _is_subgoal_same(sg1, sg2, vars_per_obj):
+                    is_used1[i] = True
+                    is_used2[j] = True
+                    break
+        if not is_used1.all() or not is_used2.all():
+            return False
+    return True
+
+
+def _is_subgoal_same(subgoal1, subgoal2, vars_per_obj):
+    if len(subgoal1) != len(subgoal2):
+        return False
+
+    is_used1 = np.zeros(len(subgoal1), dtype=bool)
+    is_used2 = np.zeros(len(subgoal2), dtype=bool)
+    for i, prop1 in enumerate(subgoal1):
+        available_indices = np.where(~is_used2)[0]
+        if len(available_indices) == 0:
+            return False
+        vars1 = {v_i % vars_per_obj for v_i in prop1.variables}
+
+        for j in available_indices:
+            prop2 = subgoal2[j]
+            vars2 = {v_i % vars_per_obj for v_i in prop2.variables}
+            if vars1 != vars2:
+                continue
+
+            sample1 = prop1.sample(100)
+            sample2 = prop2.sample(100)
+            acc1, acc2 = _knn_accuracy(sample1, sample2)
+            diff1 = abs(acc1 - 0.5)
+            diff2 = abs(acc2 - 0.5)
+            diff = (diff1 + diff2) / 2
+            if diff < 0.1:
+                # they are the same
+                is_used1[i] = True
+                is_used2[j] = True
+                break
+    return is_used1.all() and is_used2.all()
