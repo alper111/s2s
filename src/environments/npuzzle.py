@@ -21,7 +21,7 @@ class NPuzzle(gym.Env):
 
         self._data = dataset.data.numpy()
         _labels = dataset.targets.numpy()
-        self._labels = {i: np.where(_labels == i)[0] for i in range(1, 9)}
+        self._labels = {i: np.where(_labels == i)[0] for i in range(9)}
 
         self._digit_idx = None
         self._directions = np.array([[0, 1], [-1, 0], [0, -1], [1, 0]])
@@ -86,6 +86,11 @@ class NPuzzle(gym.Env):
 
         self._init_digits()
 
+        self._locations = []
+        for i, digit in enumerate(perm):
+            self._locations.append((i // self._size, i % self._size))
+            if digit == 0:
+                self._empty_index = i
         self._permutation = perm.reshape(self._size, self._size)
         self._t = 0
 
@@ -105,23 +110,25 @@ class NPuzzle(gym.Env):
     def step(self, action):
         self._t += 1
         dir, index = action
-        x, y = index // self._size, index % self._size
+        x, y = self._locations[index]
         dx, dy = self._directions[dir]
 
         # if hit the limits
         if x+dx < 0 or x+dx >= self._size or y+dy < 0 or y+dy >= self._size:
             info = self.info
             info["action_success"] = False
-            return self.observation, self.reward, self.done, self.info
+            return self.observation, self.reward, self.done, info
 
         # if the empty tile is not in the direction of the action
         if self._permutation[x+dx, y+dy] != 0:
             info = self.info
             info["action_success"] = False
-            return self.observation, self.reward, self.done, self.info
+            return self.observation, self.reward, self.done, info
 
         self._permutation[x+dx, y+dy] = self._permutation[x, y]
         self._permutation[x, y] = 0
+        self._locations[index] = (x+dx, y+dy)
+        self._locations[self._empty_index] = (x, y)
 
         obs = self.observation
         info = self.info
@@ -139,15 +146,15 @@ class NPuzzle(gym.Env):
         actions = []
         e_idx = self._permutation.reshape(-1).tolist().index(0)
         ex, ey = e_idx // self._size, e_idx % self._size
-        if ex != 0:
-            actions.append((3, (ex-1)*self._size+ey))
-        if ex != self._size-1:
-            actions.append((1, (ex+1)*self._size+ey))
-        if ey != 0:
-            actions.append((0, ex*self._size+ey-1))
-        if ey != self._size-1:
-            actions.append((2, ex*self._size+ey+1))
-
+        for i, (x, y) in enumerate(self._locations):
+            if x == ex and y == (ey-1):
+                actions.append((0, i))
+            if x == (ex+1) and y == ey:
+                actions.append((1, i))
+            if x == ex and y == (ey+1):
+                actions.append((2, i))
+            if x == (ex-1) and y == ey:
+                actions.append((3, i))
         return actions[np.random.randint(len(actions))]
 
     def render(self):
@@ -161,7 +168,7 @@ class NPuzzle(gym.Env):
 
     def _init_digits(self):
         self._digit_idx = np.zeros(self._num_tile, dtype=np.int64)
-        for i in range(1, self._num_tile):
+        for i in range(self._num_tile):
             labels = self._labels[i]
 
             if self._random:
@@ -221,12 +228,11 @@ class NPuzzle(gym.Env):
 
     def _render_tiles(self):
         objects = []
-        for i in range(self._size):
-            for j in range(self._size):
-                digit = self._permutation[i][j]
-                if digit != 0:
-                    tile = self._draw_digit(digit)
-                    objects.append((tile, i, j))
+        for loc in self._locations:
+            i, j = loc
+            digit = self._permutation[i, j]
+            tile = self._draw_digit(digit)
+            objects.append((tile, i, j))
         return objects
 
     def _draw_digit(self, digit: int) -> np.ndarray:
@@ -255,6 +261,7 @@ class NPuzzle(gym.Env):
 class NPuzzleDataset(UnorderedDataset):
     @staticmethod
     def _actions_to_label(action, key_order):
+        action_type, index = action
         a = torch.zeros(len(key_order)+1, dtype=torch.long)
-        a[0] = action
+        a[index+1] = action_type + 1
         return a
