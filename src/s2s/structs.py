@@ -560,7 +560,8 @@ class UniquePredicateList:
     def density_type(self):
         return self._density_type
 
-    def append(self, data: np.ndarray, factors: list[Factor], parameters: list[tuple[str, str]] = None) -> Proposition:
+    def append(self, data: np.ndarray, factors: list[Factor], parameters: list[tuple[str, str]] = None,
+               masked: bool = False) -> Proposition:
         """
         Adds a predicate to the predicate list. If the predicate covers multiple factors,
         all possible combinations of projections are added to the vocabulary as well.
@@ -575,6 +576,8 @@ class UniquePredicateList:
             A list of (name, type) tuples that represent the
             parameters of the predicate. The type is None if the
             argument
+        masked : bool, optional
+            Whether the data is already masked or not.
 
         Returns
         -------
@@ -585,7 +588,7 @@ class UniquePredicateList:
             item = KernelDensityEstimator(factors)
         elif self.density_type == "knn":
             item = KNNDensityEstimator(factors)
-        item.fit(data)
+        item.fit(data, masked=masked)
 
         # add all possible projections here.
         # (new_estimator, projected_factor, parent_idx)
