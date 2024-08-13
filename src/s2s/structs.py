@@ -769,9 +769,9 @@ class UniquePredicateList:
         group = self.mutex_groups[factor]
         return self[group[symbol_index]]
 
-    def _get_or_none(self, item) -> int:
+    def _get_or_none(self, item, parameters) -> int:
         for i, x in enumerate(self._list):
-            if self._comparator(item, x.estimator):
+            if self._comparator(item, x.estimator) and (parameters == x.parameters):
                 return i
         return -1
 
