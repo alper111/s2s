@@ -155,6 +155,7 @@ def build_schemata(vocabulary: UniquePredicateList,
 
 
 def create_action_schema(name: str, vocabulary: UniquePredicateList, pre_prop: list[Proposition],
+                         eff_prop: list[Proposition]) -> ActionSchema:
     """
     Create an action schema from the given preconditions and effects.
 
@@ -445,7 +446,7 @@ def _create_factored_densities(data: np.ndarray, vocabulary: UniquePredicateList
     # use validation samples for independency tests
     n_val = max(int(len(data) * 0.1), 3)
     densities = []
-    dependency_groups = _compute_factor_dependencies(data[-n_val:], factors, method="knn")
+    dependency_groups = _compute_factor_dependencies(data[-n_val:], factors, method="gaussian")
     _n_expected_symbol = sum([2**len(x)-1 for x in dependency_groups])
     logger.info(f"n_factors={len(factors)}, n_groups={len(dependency_groups)}, n_expected_symbol={_n_expected_symbol}")
     for group in dependency_groups:
@@ -575,9 +576,12 @@ def _knn_independent_factor_groups(data: np.ndarray, factors: list[Factor]) -> l
         comb_queue = list(combinations(remaining_factors, comb_size))
         while len(comb_queue) > 0:
             comb = comb_queue.pop(0)
-            remaining_factors = [f for f in remaining_factors if f not in comb]
+            other_factors = [f for f in remaining_factors if f not in comb]
+            if len(other_factors) == 0:
+                independent_factor_groups.append(comb)
+                break
             f_vars = list(chain.from_iterable([f.variables for f in comb]))
-            other_vars = list(chain.from_iterable([f.variables for f in remaining_factors]))
+            other_vars = list(chain.from_iterable([f.variables for f in other_factors]))
             data_comb = data[:, f_vars]
             data_other = data[:, other_vars]
             data_real = np.concatenate([data_comb, data_other], axis=1)
@@ -586,6 +590,9 @@ def _knn_independent_factor_groups(data: np.ndarray, factors: list[Factor]) -> l
             if abs(x_acc-y_acc) < 0.075:
                 independent_factor_groups.append(comb)
                 remaining_factors = [f for f in remaining_factors if f not in comb]
+                if len(remaining_factors) == 1:
+                    independent_factor_groups.append(tuple(remaining_factors))
+                    break
                 comb_queue = [c for c in comb_queue if not set(c).intersection(set(comb))]
     if len(independent_factor_groups) == 0:
         independent_factor_groups.append(factors)
