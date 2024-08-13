@@ -598,7 +598,7 @@ class UniquePredicateList:
         while len(add_queue) > 0:
             estimator, p_factor, parent_idx = add_queue.pop(0)
             # TODO: KD-Tree-like hash function on the estimator?
-            idx = self._get_or_none(estimator)
+            idx = self._get_or_none(estimator, parameters)
             if idx != -1:
                 predicate = self._list[idx]
                 if self.density_type == "knn":
