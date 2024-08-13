@@ -458,7 +458,7 @@ class Proposition:
         return self.estimator.variables
 
     def sample(self, n_samples) -> np.ndarray:
-        assert isinstance(self.estimatorl, DensityEstimator)
+        assert isinstance(self.estimator, DensityEstimator)
         return self.estimator.sample(n_samples)
 
     def is_grounded(self) -> bool:
