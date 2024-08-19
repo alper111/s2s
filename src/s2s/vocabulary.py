@@ -403,26 +403,6 @@ def find_typed_groups(schemata, vars_per_obj, n_max):
     return typed_groups
 
 
-def _parse_tree(tree, counts):
-    tree_ = tree.tree_
-
-    def recurse(node, rules):
-        if tree_.feature[node] != _tree.TREE_UNDEFINED:
-            left = rules.copy()
-            right = rules.copy()
-            left.append((tree_.feature[node], tree_.threshold[node], "<="))
-            right.append((tree_.feature[node], tree_.threshold[node], ">"))
-            rules_from_left = recurse(tree_.children_left[node], left)
-            rules_from_right = recurse(tree_.children_right[node], right)
-            rules = rules_from_left + rules_from_right
-            return rules
-        else:
-            leaf = rules.copy()
-            leaf.insert(0, (np.argmax(tree_.value[node][0]), counts[node]))
-            return [leaf]
-    return recurse(0, [])
-
-
 def _create_factored_densities(data: np.ndarray, vocabulary: UniquePredicateList,
                                factors: list[Factor], lifted: bool = False) \
         -> list[KernelDensityEstimator]:
