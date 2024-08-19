@@ -4,6 +4,7 @@ from typing import Callable, Optional, Union
 from collections import defaultdict
 import copy
 import os
+import heapq
 
 import numpy as np
 from sklearn.model_selection import GridSearchCV
@@ -838,6 +839,66 @@ class UniquePredicateList:
                 scores[..., p_i] = s
 
             indices[..., f_i] = np.argmax(scores, axis=-1)
+        return indices
+
+    def get_topk_symbol_indices(self, observation: np.ndarray, k: int = 5) -> tuple[np.ndarray, np.ndarray]:
+        """
+        Get the most probable k list of symbols in a beam search fashion.
+
+        Parameters
+        ----------
+        observation : np.ndarray
+            The observation to evaluate. shape: (n_obj, n_feature) or (n_feature,)
+        k : int, optional
+            The number of list of symbols to return. Default is 5.
+
+        Returns
+        -------
+        indices : np.ndarray
+            An array of size (k, n_factors) or (k, n_obj, n_factors) containing the index of the
+            active symbol for each factor.
+        scores : np.ndarray
+            An array of size (k,) containing the scores of the top-k symbols.
+        """
+        assert self.mutex_groups is not None, "Mutually exclusive factors are not defined."
+
+        if observation.ndim == 2:
+            n_obj, _ = observation.shape
+            object_factored = True
+        elif observation.ndim == 1:
+            object_factored = False
+        else:
+            raise ValueError("Invalid observation shape.")
+
+        fringe = []
+        for factor in self.mutex_groups:
+            group = self.mutex_groups[factor]
+            n_sym = len(group)
+
+            masked_obs = observation[..., factor.variables]
+            if object_factored:
+                scores = np.zeros((n_obj, n_sym))
+            else:
+                scores = np.zeros(n_sym)
+
+            for p_i, idx in enumerate(group):
+                prop = self[idx]
+                s = prop.estimator.score_samples(masked_obs)
+                scores[..., p_i] = s
+
+            new_fringe = []
+            if len(fringe) == 0:
+                for i in range(n_sym):
+                    heapq.heappush(new_fringe, (-scores[i], [i]))
+            else:
+                for i in range(n_sym):
+                    for p_k, path_k in fringe:
+                        heapq.heappush(new_fringe, (-scores[i]+p_k, path_k + [i]))
+
+            fringe = heapq.nsmallest(k, new_fringe)
+
+        indices = np.array([path for _, path in fringe])
+        # scores = np.array([-p for p, _ in fringe])
         return indices
 
     def fill_mutex_groups(self, factors: list[Factor]) -> None:
