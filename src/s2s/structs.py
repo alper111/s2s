@@ -7,6 +7,7 @@ import os
 
 import numpy as np
 from sklearn.model_selection import GridSearchCV
+from sklearn.svm import SVC
 from sklearn.neighbors import KernelDensity
 from scipy.spatial.distance import cdist
 import torch
@@ -180,6 +181,105 @@ class UnorderedDataset(torch.utils.data.Dataset):
             else:
                 a = pad_sequence(a, batch_first=True)
         return s, a, s_
+
+
+class SupportVectorClassifier:
+    """
+    An implementation of a probabilistic classifier that
+    uses support vector machines with Platt scaling.
+    """
+
+    def __init__(self, factors: list[Factor], probabilistic=True):
+        """
+        Create a new SVM classifier for preconditions
+
+        Parameters
+        ----------
+        factor : list[Factor]
+            The factors that the classifier models
+        probabilistic : bool, optional
+            Whether the classifier is probabilistic
+        """
+        self._factors = factors
+        self._probabilistic = probabilistic
+        self._classifier: SVC | None = None
+
+    @property
+    def factors(self) -> list[Factor]:
+        """
+        Get the precondition mask
+        """
+        return self._factors
+
+    @property
+    def variables(self) -> list[int]:
+        variables = []
+        for f in self.factors:
+            variables.extend(f.variables)
+        return variables
+
+    def fit(self, X, y, **kwargs):
+        """
+        Fit the data to the classifier using a grid search
+        for the hyperparameters with cross-validation
+
+        Parameters
+        ----------
+        X : array-like of shape (n_samples, n_features)
+            The input data.
+
+        y : array-like of shape (n_samples,)
+            The target values.
+
+        **kwargs : dict, optional
+            Additional keyword arguments.
+        """
+        c_range = kwargs.get('precondition_c_range', np.logspace(-2, 2, 10))
+        gamma_range = kwargs.get('precondition_gamma_range', np.logspace(-2, 2, 10))
+
+        param_grid = {'gamma': gamma_range, 'C': c_range}
+        grid = GridSearchCV(SVC(class_weight='balanced'), param_grid=param_grid, cv=3, n_jobs=-1)  # 3 fold CV
+        if kwargs.get('masked', False):
+            data = X
+        else:
+            data = X[:, self.variables]
+        grid.fit(data, y)
+
+        if not self._probabilistic:
+            self._classifier = grid.best_estimator_  # we're done
+        else:
+            # we've found the best hyperparams. Now do it again with Platt scaling turned on
+            params = grid.best_params_
+            # Now do Platt scaling with the optimal parameters
+            self._classifier = SVC(probability=True, class_weight='balanced', C=params['C'], gamma=params['gamma'])
+            self._classifier.fit(data, y)
+
+    def probability(self, states: np.ndarray, masked=False) -> float:
+        """
+        Compute the probability of the state given the learned classifier.
+
+        Parameters
+        ----------
+        states : np.ndarray
+            The states.
+
+        Returns
+        -------
+        float
+            The probability of the state according to the classifier.
+        """
+        assert isinstance(self._classifier, SVC), "Classifier not trained yet"
+        if states.ndim == 1:
+            states = states.reshape(1, -1)
+
+        if masked:
+            masked_states = states
+        else:
+            masked_states = states[:, self.variables]
+        if self._probabilistic:
+            return self._classifier.predict_proba(masked_states)[:, 1]
+        else:
+            return self._classifier.predict(masked_states)
 
 
 class DensityEstimator:
