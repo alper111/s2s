@@ -458,6 +458,44 @@ def _create_factored_densities(data: np.ndarray, vocabulary: UniquePredicateList
     return densities
 
 
+def _find_best_factors(x: np.ndarray, y: np.ndarray, vocabulary: UniquePredicateList) \
+        -> Union[list[Proposition], list[list[Proposition]]]:
+    """
+    Find the best factors for the given data.
+
+    Parameters
+    ----------
+        x : np.ndarray
+            The data.
+        y : np.ndarray
+            The labels.
+        vocabulary : UniquePredicateList
+            The vocabulary of propositions.
+
+    Returns
+    -------
+        preconditions : list[Proposition] | list[list[Proposition]]
+            The preconditions.
+    """
+    y = y.astype(int)
+    n = len(y) // 2
+    symbol_indices = vocabulary.get_active_symbol_indices(x)
+    tree = DecisionTreeClassifier()
+    tree.fit(symbol_indices, y)
+    pos_symbol_indices = symbol_indices[:n]
+    counts = tree.decision_path(pos_symbol_indices).toarray().sum(axis=0)
+    rules = _parse_tree(tree, counts)
+    rules = [r_i[1:] for r_i in rules if r_i[0][0] == 1 and r_i[0][1] > n*0.01]
+    factors = []
+    for r_i in rules:
+        for decision in r_i:
+            feat, _, _ = decision
+            factor = [factor for factor in vocabulary.factors if feat in factor.variables][0]
+            if factor not in factors:
+                factors.append(factor)
+    return factors
+
+
 def _compute_factor_dependencies(data: np.ndarray, factors: list[Factor], method: str = "independent") \
         -> list[list[Factor]]:
     """
@@ -758,3 +796,23 @@ def _is_subgoal_same(subgoal1, subgoal2, vars_per_obj):
                 is_used2[j] = True
                 break
     return is_used1.all() and is_used2.all()
+
+
+def _parse_tree(tree, counts):
+    tree_ = tree.tree_
+
+    def recurse(node, rules):
+        if tree_.feature[node] != _tree.TREE_UNDEFINED:
+            left = rules.copy()
+            right = rules.copy()
+            left.append((tree_.feature[node], tree_.threshold[node], "<="))
+            right.append((tree_.feature[node], tree_.threshold[node], ">"))
+            rules_from_left = recurse(tree_.children_left[node], left)
+            rules_from_right = recurse(tree_.children_right[node], right)
+            rules = rules_from_left + rules_from_right
+            return rules
+        else:
+            leaf = rules.copy()
+            leaf.insert(0, (np.argmax(tree_.value[node][0]), counts[node]))
+            return [leaf]
+    return recurse(0, [])
