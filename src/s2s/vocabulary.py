@@ -1,15 +1,14 @@
-from itertools import chain, combinations
+from itertools import chain, combinations, product
 from typing import Union
 import logging
 from copy import deepcopy
 
 import numpy as np
-from scipy import stats
 from scipy.spatial.distance import cdist
 from sklearn.tree import DecisionTreeClassifier, _tree
 
 from s2s.structs import (KernelDensityEstimator, KNNDensityEstimator, UniquePredicateList,
-                         Factor, Proposition, ActionSchema, S2SDataset)
+                         Factor, Proposition, ActionSchema, S2SDataset, SupportVectorClassifier)
 
 __author__ = 'Steve James and George Konidaris'
 # Modified by Alper Ahmetoglu. Original source:
@@ -47,7 +46,7 @@ def build_vocabulary(partitions: dict[tuple[int, int], S2SDataset], factors: lis
     eff_props = {}
 
     # first add the factors to the partitions (mutates partitions!)
-    add_factors_to_partitions(partitions, factors, threshold=0.9)
+    add_factors_to_partitions(partitions, factors, threshold=0.01)
 
     # create effect symbols
     for key in partitions:
@@ -60,65 +59,23 @@ def build_vocabulary(partitions: dict[tuple[int, int], S2SDataset], factors: lis
     # important: this assumes the partition semantics, not distribution!
     vocabulary.fill_mutex_groups(factors)
 
-    # learn symbols for constant factors in case we need them for preconditions
+    # learn constant symbols (if there are any) in case we need them for preconditions
     for f_i, factor in enumerate(vocabulary.mutex_groups):
         group = vocabulary.mutex_groups[factor]
         # no effect changes this factor, but there might be preconditions that depend on this factor.
         # so, learn a density estimator for each precondition just to be safe.
-        # there should be only one such factor.
+        # I think there should be only one such factor because they should be grouped together.
         if len(group) == 0:
-            logger.info(f"Factor {f_i} is constant. Learning a density estimator in case a precond depends on it.")
-            for key in partitions:
-                logger.debug(f"Learning a density estimator for Pre({key[0]}-{key[1]}) on factor {f_i}...")
-                partition_k = partitions[key]
-                if partition_k.is_object_factored:
-                    for j in range(partition_k.n_objects):
-                        vocabulary.append(partition_k.state[:, j], [factor], [("x", None)])
-                else:
-                    vocabulary.append(partition_k.state, [factor])
-            for i, pred in enumerate(vocabulary):
-                if pred.factors[0] == factor:
-                    group.append(i)
+            logger.info(f"Factor {f_i} is constant. Learning a constant symbol for each partition \
+                         in case a precondition depends on it.")
+            vocabulary = append_constant_symbols(vocabulary, partitions, factor)
 
     # now learn preconditions in terms of the vocabulary found in the previous step
-    # important: this part learns the most probably precondition and disregards others,
-    # possibly breaking the soundness, but makes it efficient!
     for key in partitions:
-        x_pos = partitions[key].state
-        n = len(x_pos)
-        other_options = [o for o in partitions if o != key]
-        pre_count = {}
-        fac_count = {}
-        k_cross = 20
-        for _ in range(k_cross):
-            x_neg = []
-            for _ in range(n):
-                j = np.random.randint(len(other_options))
-                o_ = other_options[j]
-                ds_neg = partitions[o_]
-                sample_neg = ds_neg.state[np.random.randint(len(ds_neg.state))]
-                x_neg.append(sample_neg)
-            x_neg = np.array(x_neg)
-            x = np.concatenate([x_pos, x_neg])
-            y = np.concatenate([np.ones(x_pos.shape[0]), np.zeros(x_neg.shape[0])])
-            pre = find_best_pre_symbols(x, y, vocabulary)
-            # count the number of times each proposition is selected
-            for i, prop in enumerate(pre):
-                if prop not in pre_count:
-                    pre_count[prop] = 0
-                for f_i in prop.factors:
-                    if f_i not in fac_count:
-                        fac_count[f_i] = 0
-                    fac_count[f_i] += 1
-                pre_count[prop] += 1
-
-        pre = []
-        for prop in pre_count:
-            if pre_count[prop] >= k_cross * 0.8:
-                pre.append(prop)
-
-        pre_props[key] = pre
-        logger.info(f"Processed Pre({key[0]}-{key[1]}); {len(pre)} predicates found.")
+        vocabulary, preds = create_precondition_clause(key, partitions, vocabulary)
+        pre_props[key] = preds
+        logger.info(f"Processed Pre({key[0]}-{key[1]}); {len(preds)} subpartitions, "
+                    f"{sum([len(p) for p in preds])} predicates found in total.")
     return vocabulary, pre_props, eff_props
 
 
@@ -279,55 +236,105 @@ def add_factors_to_partitions(partitions: dict[tuple[int, int], S2SDataset], fac
                     partition.factors.append(factor)
 
 
-def find_best_pre_symbols(x: np.ndarray, y: np.ndarray, vocabulary: UniquePredicateList) \
-        -> Union[list[Proposition], list[list[Proposition]]]:
+def append_constant_symbols(vocabulary: UniquePredicateList,
+                            partitions: dict[tuple[int, int], S2SDataset],
+                            factor: Factor) -> UniquePredicateList:
+    group = vocabulary.mutex_groups[factor]
+    for key in partitions:
+        logger.debug(f"Learning a constant symbol for Pre({key[0]}-{key[1]}) on {factor}...")
+        partition_k = partitions[key]
+        if partition_k.is_object_factored:
+            for j in range(partition_k.n_objects):
+                vocabulary.append(partition_k.state[:, j], [factor], [("x", None)])
+        else:
+            vocabulary.append(partition_k.state, [factor])
+    for i, pred in enumerate(vocabulary):
+        if pred.factors[0] == factor:
+            group.append(i)
+    return vocabulary
+
+
+def create_precondition_clause(partition_key: tuple[int, int],
+                               partitions: dict[tuple[int, int], S2SDataset],
+                               vocabulary: UniquePredicateList) -> tuple[UniquePredicateList, list[list[Proposition]]]:
     """
-    Compute the preconditions from the given data.
+    Create the precondition clause for the given partition.
 
     Parameters
     ----------
-        x : np.ndarray
-            The data.
-        y : np.ndarray
-            The labels.
+        partition_key : tuple[int, int]
+            The partition key.
+        partitions : dict[tuple[int, int], S2SDataset]
+            The partitions.
         vocabulary : UniquePredicateList
             The vocabulary of propositions.
 
     Returns
     -------
-        preconditions : list[Proposition] | list[list[Proposition]]
-            The preconditions.
+        vocabulary : UniquePredicateList
+            The updated vocabulary of propositions.
+        precondition_clause : list[Proposition]
+            The precondition clause.
     """
-    y = y.astype(int)
-    n = len(y) // 2
-    symbol_indices = vocabulary.get_active_symbol_indices(x)
-    tree = DecisionTreeClassifier()
-    tree.fit(symbol_indices, y)
-    pos_symbol_indices = symbol_indices[:n]
-    counts = tree.decision_path(pos_symbol_indices).toarray().sum(axis=0)
-    rules = _parse_tree(tree, counts)
-    rules = [r_i[1:] for r_i in rules if r_i[0][0] == 1 and r_i[0][1] > n*0.01]
-    symbols = {}
-    for r_i in rules:
-        mask = np.ones(symbol_indices.shape[0], dtype=bool)
-        feats = []
-        for decision in r_i:
-            feat, thresh, op = decision
-            if op == "<=":
-                mask &= symbol_indices[:, feat] <= thresh
-            else:
-                mask &= symbol_indices[:, feat] > thresh
-            feats.append(feat)
-        if not np.any(mask):
-            continue
-        samples = symbol_indices[mask]
-        mode, _ = stats.mode(samples, axis=0, keepdims=False)
-        for f_i in feats:
-            prop = vocabulary.get_by_index(f_i, int(mode[f_i]))
-            if prop not in symbols:
-                symbols[prop] = 0
-            symbols[prop] += 1
-    return list(symbols.keys())
+    factors = find_precondition_factors(partition_key, partitions, vocabulary, k_cross=50)
+    x_pos = partitions[partition_key].state
+    x_neg = _generate_negative_data(partition_key, partitions, len(x_pos))
+    x = np.concatenate([x_pos, x_neg])
+    y = np.concatenate([np.ones(x_pos.shape[0]), np.zeros(x_neg.shape[0])])
+    svm = SupportVectorClassifier(factors=factors)
+    svm.fit(x, y)
+
+    preconditions = []
+    candidates = [vocabulary[vocabulary.mutex_groups[f_i]] for f_i in factors]
+    n_loop = np.prod([len(c) for c in candidates])
+    if n_loop > 1000:
+        logger.info(f"Finding preconditions for {n_loop} combinations of propositions...")
+    combs = product(*candidates)
+    for cand_props in combs:
+        samples = np.zeros((100, x.shape[1]))
+        for p in cand_props:
+            samples[:, p.variables] = p.sample(100)
+        y_prob = svm.probability(samples)
+        if y_prob.mean() > 0.5:
+            preconditions.append(list(cand_props))
+    return vocabulary, preconditions
+
+
+def find_precondition_factors(partition_key: tuple[int, int],
+                              partitions: dict[tuple[int, int], S2SDataset],
+                              vocabulary: UniquePredicateList, k_cross: int = 20) -> list[Factor]:
+    x_pos = partitions[partition_key].state
+    fac_count = {}
+    for _ in range(k_cross):
+        x_neg = _generate_negative_data(partition_key, partitions, len(x_pos))
+        x = np.concatenate([x_pos, x_neg])
+        y = np.concatenate([np.ones(x_pos.shape[0]), np.zeros(x_neg.shape[0])])
+        factors = _find_best_factors(x, y, vocabulary)
+        # count the number of times each proposition is selected
+        for factor in factors:
+            if factor not in fac_count:
+                fac_count[factor] = 0
+            fac_count[factor] += 1
+
+    factors = []
+    for fac in fac_count:
+        if fac_count[fac] >= k_cross * 0.9:
+            factors.append(fac)
+    return factors
+
+
+def _generate_negative_data(partition_key: tuple[int, int],
+                            partitions: dict[tuple[int, int], S2SDataset],
+                            n_samples: int) -> np.ndarray:
+    x_neg = []
+    other_subgoals = [o for o in partitions if o != partition_key]
+    for _ in range(n_samples):
+        j = np.random.randint(len(other_subgoals))
+        o_ = other_subgoals[j]
+        ds_neg = partitions[o_]
+        sample_neg = ds_neg.state[np.random.randint(len(ds_neg.state))]
+        x_neg.append(sample_neg)
+    return np.array(x_neg)
 
 
 def lift_vocabulary_and_schemata(vocabulary, schemata, vars_per_obj, max_objects):
