@@ -55,6 +55,10 @@ def build_vocabulary(partitions: dict[tuple[int, int], S2SDataset], factors: lis
         logger.info(f"Processed Eff({key[0]}-{key[1]}); {len(preds)} predicates found.")
         eff_props[key] = preds
 
+    # merge equivalent eff_props if there is a valid
+    # substitution for the object-factored case
+    if partition_k.is_object_factored:
+        merge_equivalent_effects(partitions, eff_props)
     # compute symbols over factors that are mutually exclusive.
     # important: this assumes the partition semantics, not distribution!
     vocabulary.fill_mutex_groups(factors)
@@ -321,6 +325,45 @@ def find_precondition_factors(partition_key: tuple[int, int],
         if fac_count[fac] >= k_cross * 0.9:
             factors.append(fac)
     return factors
+
+
+def merge_equivalent_effects(partitions: dict[tuple[int, int], S2SDataset],
+                             eff_props: dict[tuple[int, int], list[Proposition]]):
+    all_keys = list(partitions.keys())
+    options = []
+    for (opt, _) in all_keys:
+        if opt not in options:
+            options.append(opt)
+
+    for opt in options:
+        for i, key_i in enumerate(all_keys):
+            if key_i[0] != opt:
+                continue
+            if key_i not in eff_props:
+                continue
+            for j, key_j in enumerate(all_keys):
+                if key_j[0] != opt:
+                    continue
+                if key_j not in eff_props:
+                    continue
+                if i >= j:
+                    continue
+                subs = _find_substitution(eff_props[key_i], eff_props[key_j])
+                if len(subs) > 0:
+                    logger.info(f"Merging Eff({key_i[0]}-{key_i[1]}) and Eff({key_j[0]}-{key_j[1]})...")
+                    partition_i = _merge_partitions(partitions[key_i], partitions[key_j], subs)
+                    partitions[key_i] = partition_i
+                    # remove the merged partition
+                    del partitions[key_j]
+                    del eff_props[key_j]
+    logger.info(f"Found {len(partitions)} partitions after merging equivalent effects.")
+    n_partitions_option = {}
+    for key in partitions:
+        if key[0] not in n_partitions_option:
+            n_partitions_option[key[0]] = 0
+        n_partitions_option[key[0]] += 1
+    for key in n_partitions_option:
+        logger.info(f"Number of partitions for {key}={n_partitions_option[key]}.")
 
 
 def _generate_negative_data(partition_key: tuple[int, int],
@@ -783,6 +826,80 @@ def _is_subgoal_same(subgoal1, subgoal2, vars_per_obj):
                 is_used2[j] = True
                 break
     return is_used1.all() and is_used2.all()
+
+
+def _find_substitution(props1, props2) -> dict[int, int]:
+    """
+    Given two lists of propositions, find a substitution
+    that makes them equal if there are any.
+
+    Parameters
+    ----------
+    props1 : list[Proposition]
+        The first list of propositions.
+    props2 : list[Proposition]
+        The second list of propositions.
+
+    Returns
+    -------
+    substitution : dict[int, int]
+        The mapping from the indices of the first list
+        to the indices of the second list if the substitution
+        exists, i.e., ```props1 == [props2[i] for i in substitution]```
+        is True. Otherwise, an empty dictionary is returned.
+    """
+    substitution = {}
+    is_used1 = np.zeros(len(props1), dtype=bool)
+    is_used2 = np.zeros(len(props2), dtype=bool)
+    for i, prop1 in enumerate(props1):
+        available_indices = np.where(~is_used2)[0]
+        if len(available_indices) == 0:
+            return {}
+
+        for j in available_indices:
+            prop2 = props2[j]
+            if prop1.idx == prop2.idx:
+                is_used1[i] = True
+                is_used2[j] = True
+                o_i = int(prop1.parameters[0][0][1:])
+                o_j = int(prop2.parameters[0][0][1:])
+                substitution[o_i] = o_j
+                break
+    if not is_used1.all() or not is_used2.all():
+        return {}
+    return substitution
+
+
+def _merge_partitions(partition_i: S2SDataset, partition_j: S2SDataset, subs: dict[int, int]) -> S2SDataset:
+    """
+    Merge two partitions. The first partition is mutated in place.
+
+    Parameters
+    ----------
+    partition_i : S2SDataset
+        The first partition.
+    partition_j : S2SDataset
+        The second partition.
+    subs : dict[int, int]
+        The substitution mapping.
+
+    Returns
+    -------
+    partition_i : S2SDataset
+        The merged partition.
+    """
+    sub_arr = []
+    for i in range(partition_i.state.shape[1]):
+        if i in subs:
+            sub_arr.append(subs[i])
+        else:
+            sub_arr.append(i)
+    partition_i.state = np.concatenate([partition_i.state, partition_j.state[:, sub_arr]])
+    partition_i.next_state = np.concatenate([partition_i.next_state, partition_j.next_state[:, sub_arr]])
+    partition_i.mask = np.concatenate([partition_i.mask, partition_j.mask[:, sub_arr]])
+    partition_i.option = np.concatenate([partition_i.option, partition_j.option])
+    partition_i.reward = np.concatenate([partition_i.reward, partition_j.reward])
+    return partition_i
 
 
 def _parse_tree(tree, counts):
