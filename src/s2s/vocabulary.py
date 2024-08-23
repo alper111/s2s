@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 
 def build_vocabulary(partitions: dict[tuple[int, int], S2SDataset], factors: list[Factor]) \
         -> tuple[UniquePredicateList,
-                 dict[tuple[int, int], list[Proposition]],
+                 dict[tuple[int, int], list[list[Proposition]]],
                  dict[tuple[int, int], list[Proposition]]]:
     """
     Build the vocabulary of propositions from the given partitions.
@@ -35,7 +35,7 @@ def build_vocabulary(partitions: dict[tuple[int, int], S2SDataset], factors: lis
     -------
         vocabulary : UniquePredicateList
             The vocabulary of propositions.
-        pre_props : dict[tuple[int, int], list[Proposition]]
+        pre_props : dict[tuple[int, int], list[list[Proposition]]]
             The preconditions for each partition.
         eff_props : dict[tuple[int, int], list[Proposition]]
             The effects for each partition.
@@ -84,7 +84,7 @@ def build_vocabulary(partitions: dict[tuple[int, int], S2SDataset], factors: lis
 
 
 def build_schemata(vocabulary: UniquePredicateList,
-                   pre_props: dict[tuple[int, int], Union[list[Proposition], list[list[Proposition]]]],
+                   pre_props: dict[tuple[int, int], list[list[Proposition]]],
                    eff_props: dict[tuple[int, int], Union[list[Proposition], list[list[Proposition]]]]) \
                     -> list[ActionSchema]:
     """
@@ -94,7 +94,7 @@ def build_schemata(vocabulary: UniquePredicateList,
     ----------
         vocabulary : UniquePredicateList
             The vocabulary of propositions.
-        pre_props : dict[tuple[int, int], list[Proposition] | list[list[Proposition]]]
+        pre_props : dict[tuple[int, int], list[list[Proposition]]]
             The preconditions for each partition.
         eff_props : dict[tuple[int, int], list[Proposition] | list[list[Proposition]]]
             The effects for each partition.
@@ -111,12 +111,12 @@ def build_schemata(vocabulary: UniquePredicateList,
         if len(eff) == 0:
             continue
         action_schema = create_action_schema(f"a{key[0]}_p{key[1]}", vocabulary, pre, eff)
-        schemata.append(action_schema)
+        schemata.extend(action_schema)
     return schemata
 
 
-def create_action_schema(name: str, vocabulary: UniquePredicateList, pre_prop: list[Proposition],
-                         eff_prop: list[Proposition]) -> ActionSchema:
+def create_action_schema(name: str, vocabulary: UniquePredicateList, pre_prop: list[list[Proposition]],
+                         eff_prop: list[Proposition]) -> list[ActionSchema]:
     """
     Create an action schema from the given preconditions and effects.
 
@@ -126,35 +126,39 @@ def create_action_schema(name: str, vocabulary: UniquePredicateList, pre_prop: l
             The name of the action schema.
         vocabulary : UniquePredicateList
             The vocabulary of propositions.
-        pre_prop : list[Proposition]
+        pre_prop : list[list[Proposition]]
             The preconditions.
         eff_prop : list[Proposition]
             The effects.
 
     Returns
     -------
-        action_schema : ActionSchema
-            The action schema with the preconditions and effects added.
+        action_schemas : list[ActionSchema]
+            A list of action schemas with the preconditions and effects added for each
+            alternative precondition.
     """
-    action_schema = ActionSchema(name)
-    action_schema.add_preconditions(pre_prop)
+    schemas = []
+    for i, pre_i in enumerate(pre_prop):
+        action_schema = ActionSchema(f"{name}_{i}")
+        action_schema.add_preconditions(pre_i)
 
-    # TODO: add probabilities...
-    f_pre = set()
-    f_eff = set()
-    for prop in pre_prop:
-        f_pre = f_pre.union(set(prop.factors))
-    for prop in eff_prop:
-        f_eff = f_eff.union(set(prop.factors))
+        # TODO: add probabilities...
+        f_pre = set()
+        f_eff = set()
+        for prop in pre_i:
+            f_pre = f_pre.union(set(prop.factors))
+        for prop in eff_prop:
+            f_eff = f_eff.union(set(prop.factors))
 
-    eff_neg = [x.negate() for x in pre_prop if set(x.factors).issubset(f_eff)]
-    eff_proj_neg = [x for x in pre_prop if (not set(x.factors).issubset(f_eff)) and
-                                           (not set(x.factors).isdisjoint(f_eff))]
-    eff_proj_pos = [vocabulary.project(x, list(f_eff)) for x in eff_proj_neg]
-    eff_proj_neg = [x.negate() for x in eff_proj_neg]
+        eff_neg = [x.negate() for x in pre_i if set(x.factors).issubset(f_eff)]
+        eff_proj_neg = [x for x in pre_i if (not set(x.factors).issubset(f_eff)) and
+                                            (not set(x.factors).isdisjoint(f_eff))]
+        eff_proj_pos = [vocabulary.project(x, list(f_eff)) for x in eff_proj_neg]
+        eff_proj_neg = [x.negate() for x in eff_proj_neg]
 
-    action_schema.add_effects(eff_prop + eff_proj_pos + eff_neg + eff_proj_neg)
-    return action_schema
+        action_schema.add_effects(eff_prop + eff_proj_pos + eff_neg + eff_proj_neg)
+        schemas.append(action_schema)
+    return schemas
 
 
 def create_effect_clause(vocabulary: UniquePredicateList, partition: S2SDataset) \
