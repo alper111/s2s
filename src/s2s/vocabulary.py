@@ -704,6 +704,34 @@ def _overlapping_dists(x: KernelDensityEstimator, y: KernelDensityEstimator) -> 
     return True
 
 
+def _l2_norm_overlapping(x: KNNDensityEstimator, y: KNNDensityEstimator, threshold: float = 1) -> bool:
+    """
+    A measure of similarity that compares the L2 norm of the means.
+
+    Parameters
+    ----------
+        x : KNNDensityEstimator
+            The first distribution.
+        y : KNNDensityEstimator
+            The second distribution.
+        threshold : float
+            The threshold for the L2 norm of the means.
+
+    Returns
+    -------
+        bool: True if the distributions are similar, False otherwise.
+    """
+    if set(x.factors) != set(y.factors):
+        return False
+
+    dat1 = x.sample(100)
+    dat2 = y.sample(100)
+
+    mean1 = np.mean(dat1, axis=0)
+    mean2 = np.mean(dat2, axis=0)
+    return np.linalg.norm(mean1 - mean2) < threshold
+
+
 def _knn_overlapping(x: KNNDensityEstimator, y: KNNDensityEstimator, k: int = 5, threshold=0.1) -> bool:
     if set(x.factors) != set(y.factors):
         return False
