@@ -984,40 +984,40 @@ class LiftedDecisionTree:
             pre = []
             a_it = 0
             for node in branch:
-                (o_id, _, s_id), sign = node
+                (o_id, f_i), s_i = node
+                sym = self.vocabulary.get_by_index(f_i, s_i)
+
                 if o_id == -1:
-                    sym = self.vocabulary[s_id].substitute([(f"a{a_it}", None)])
+                    sym = sym.substitute([(f"a{a_it}", None)])
                     a_it += 1
                 else:
-                    sym = self.vocabulary[s_id].substitute([(f"x{o_id}", None)])
-                if sign == 0:
-                    sym = sym.negate()
+                    sym = sym.substitute([(f"x{o_id}", None)])
                 pre.append(sym)
             preconditions.append(pre)
         return preconditions
 
-    def decision_path(self, x):
-        x = self._translate(x)
-        decisions = []
-        for v in self.nodes:
-            _, g = self._get_decision_masks(self.nodes[v], x)
-            decisions.append(g.astype(int))
-        return np.stack(decisions, axis=1)
+    # def decision_path(self, x):
+    #     x = self._translate(x)
+    #     decisions = []
+    #     for v in self.nodes:
+    #         masks = self._get_decision_masks(self.nodes[v], x)
+    #         decisions.append(masks.astype(int))
+    #     return np.stack(decisions, axis=1)
 
-    def predict(self, x):
-        g = self.decision_path(x)
-        y = np.zeros(len(x))
-        for i, path in enumerate(g):
-            v = 0
-            for d_j in path:
-                if v not in self.nodes:
-                    break
-                if d_j == 0:
-                    v = 2*v + 1
-                else:
-                    v = 2*v + 2
-            y[i] = self.leaves[v][1]
-        return y
+    # def predict(self, x):
+    #     g = self.decision_path(x)
+    #     y = np.zeros(len(x))
+    #     for i, path in enumerate(g):
+    #         v = 0
+    #         for d_j in path:
+    #             if v not in self.nodes:
+    #                 break
+    #             if d_j == 0:
+    #                 v = 2*v + 1
+    #             else:
+    #                 v = 2*v + 2
+    #         y[i] = self.leaves[v][1]
+    #     return y
 
     def _translate(self, x):
         x = self.vocabulary.get_active_symbol_indices(x)
@@ -1028,73 +1028,69 @@ class LiftedDecisionTree:
         return symbols
 
     def _build_tree(self, x, y):
-        queue = [(0, [], x, y)]
+        queue = [((0, -1), [], x, y)]
+        v_count = 1
         while len(queue) > 0:
-            v_idx, rules, x, y = queue.pop(0)
-            rule, left, right = self._compute_best_rule(x, y)
-            n_left = len(y[left])
-            n_right = len(y[right])
-            if (n_left == 0) or (n_right == 0):
-                self.leaves[v_idx] = (rules, y.mean())
+            (v_idx, parent), rules, x, y = queue.pop(0)
+            rule, child_masks = self._compute_best_rule(x, y)
+            if rule is None:
+                self.leaves[(v_idx, parent)] = (rules, y.mean())
                 continue
 
-            self.nodes[v_idx] = rule
-            left_idx = 2*v_idx + 1
-            right_idx = 2*v_idx + 2
-            rule_left = (rule, 0)
-            rule_right = (rule, 1)
-
-            if (n_left >= self.min_samples_split):
-                queue.append((left_idx, rules + [rule_left], x[left], y[left]))
-            else:
-                self.leaves[left_idx] = (rules + [rule_left], y[left].mean())
-            if (n_right >= self.min_samples_split):
-                queue.append((right_idx, rules + [rule_right], x[right], y[right]))
-            else:
-                self.leaves[right_idx] = (rules + [rule_right], y[right].mean())
+            self.nodes[(v_idx, parent)] = rule
+            for c_i, mask in enumerate(child_masks):
+                child_rule = (rule, c_i)
+                n_child = mask.sum()
+                if n_child >= self.min_samples_split:
+                    queue.append(((v_count, v_idx), rules + [child_rule], x[mask], y[mask]))
+                    v_count += 1
+                elif n_child > 0:
+                    self.leaves[(v_count, v_idx)] = (rules + [child_rule], y[mask].mean())
+                    v_count += 1
 
     def _compute_best_rule(self, x, y):
         best_rule = None
-        best_left = None
-        best_right = None
-        best_info_gain = np.inf
+        best_child_masks = None
+        best_info_gain = 1e-8
         for rule in self._get_valid_rules():
-            info_gain, left_mask, right_mask = self._compute_info_gain(rule, x, y)
-            if info_gain < best_info_gain:
+            info_gain, child_masks = self._compute_info_gain(rule, x, y)
+            if info_gain > best_info_gain:
                 best_rule = rule
-                best_left = left_mask
-                best_right = right_mask
+                best_child_masks = child_masks
                 best_info_gain = info_gain
-        return best_rule, best_left, best_right
+        return best_rule, best_child_masks
 
     def _get_valid_rules(self):
         rules = []
-        for i, f_i in enumerate(self.vocabulary.factors):
-            for s_j in self.vocabulary.mutex_groups[f_i]:
-                for o_x in self.ref_indices:
-                    rules.append((o_x, i, s_j))
-                rules.append((-1, i, s_j))
+        for i, _ in enumerate(self.vocabulary.factors):
+            for o_x in self.ref_indices:
+                rules.append((o_x, i))
+            rules.append((-1, i))
         return rules
 
     def _compute_info_gain(self, rule, x, y):
-        left_mask, right_mask = self._get_decision_masks(rule, x)
+        child_masks = self._get_decision_masks(rule, x)
         n = len(y)
-        n_left = len(y[left_mask])
-        n_right = len(y[right_mask])
-        left_entropy = self._entropy(y[left_mask])
-        right_entropy = self._entropy(y[right_mask])
-        new_info = (n_left/n)*left_entropy + (n_right/n)*right_entropy
-        # info_gain = self._entropy(y) - new_info
-        return new_info, left_mask, right_mask
+        child_entropy = 0.0
+        for mask in child_masks:
+            n_i = len(y[mask])
+            if n_i == 0:
+                continue
+            child_entropy += (n_i/n)*self._entropy(y[mask])
+        info_gain = self._entropy(y) - child_entropy
+        return info_gain, child_masks
 
     def _get_decision_masks(self, rule, x):
-        o_i, f_i, s_i = rule
-        if o_i == -1:
-            right_mask = (x[:, :, f_i] == s_i).any(axis=1)
-        else:
-            right_mask = (x[:, o_i, f_i] == s_i)
-        left_mask = ~right_mask
-        return left_mask, right_mask
+        o_i, f_i = rule
+        syms = self.vocabulary.mutex_groups[self.vocabulary.factors[f_i]]
+        child_masks = []
+        for s_i in syms:
+            if o_i == -1:
+                mask = (x[:, :, f_i] == s_i).any(axis=1)
+            else:
+                mask = (x[:, o_i, f_i] == s_i)
+            child_masks.append(mask)
+        return child_masks
 
     @staticmethod
     def _entropy(y):
