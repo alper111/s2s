@@ -668,7 +668,7 @@ class UniquePredicateList:
         return self._density_type
 
     def append(self, data: np.ndarray, factors: list[Factor], parameters: list[tuple[str, str]] = None,
-               masked: bool = False) -> Proposition:
+               masked: bool = False, forced: bool = False) -> Proposition:
         """
         Adds a predicate to the predicate list. If the predicate covers multiple factors,
         all possible combinations of projections are added to the vocabulary as well.
@@ -685,6 +685,9 @@ class UniquePredicateList:
             argument
         masked : bool, optional
             Whether the data is already masked or not.
+        forced : bool, optional
+            Whether to force the addition of the predicate to
+            the vocabulary without checking for duplicates.
 
         Returns
         -------
@@ -706,7 +709,7 @@ class UniquePredicateList:
             estimator, p_factor, parent_idx = add_queue.pop(0)
             # TODO: KD-Tree-like hash function on the estimator?
             idx = self._get_or_none(estimator, parameters)
-            if idx != -1:
+            if (idx != -1) and (not forced):
                 predicate = self._list[idx]
                 if self.density_type == "knn":
                     # add new samples to the existing estimator
