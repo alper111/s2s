@@ -71,13 +71,15 @@ def build_vocabulary(partitions: dict[tuple[int, int], S2SDataset], factors: lis
         # so, learn a density estimator for each precondition just to be safe.
         # I think there should be only one such factor because they should be grouped together.
         if len(group) == 0:
-            logger.info(f"Factor {f_i} is constant. Learning a constant symbol for each partition \
-                         in case a precondition depends on it.")
+            logger.info(f"Factor {f_i} is constant. Learning a constant symbol for each partition "
+                        f"in case a precondition depends on it.")
             vocabulary = append_constant_symbols(vocabulary, partitions, factor)
+    logger.info(f"Found {len(vocabulary)} unique symbols in total.")
 
     # now learn preconditions in terms of the vocabulary found in the previous step
     for key in partitions:
-        vocabulary, preds = create_precondition_clause(key, partitions, vocabulary)
+        # vocabulary, preds = create_precondition_clause(key, partitions, vocabulary)
+        preds = create_lifted_precondition(key, partitions, vocabulary, k_cross=10)
         pre_props[key] = preds
         logger.info(f"Processed Pre({key[0]}-{key[1]}); {len(preds)} subpartitions, "
                     f"{sum([len(p) for p in preds])} predicates found in total.")
@@ -109,8 +111,6 @@ def build_schemata(vocabulary: UniquePredicateList,
     for key in pre_props:
         pre = pre_props[key]
         eff = eff_props[key]
-        if len(eff) == 0:
-            continue
         action_schema = create_action_schema(f"a{key[0]}_p{key[1]}", vocabulary, pre, eff)
         schemata.extend(action_schema)
     return schemata
@@ -151,11 +151,12 @@ def create_action_schema(name: str, vocabulary: UniquePredicateList, pre_prop: l
         for prop in eff_prop:
             f_eff = f_eff.union(set(prop.factors))
 
-        eff_neg = [x.negate() for x in pre_i if set(x.factors).issubset(f_eff)]
+        eff_neg = [x.negate() for x in pre_i if (set(x.factors).issubset(f_eff) and
+                                                 x.sign == 1)]
         eff_proj_neg = [x for x in pre_i if (not set(x.factors).issubset(f_eff)) and
                                             (not set(x.factors).isdisjoint(f_eff))]
         eff_proj_pos = [vocabulary.project(x, list(f_eff)) for x in eff_proj_neg]
-        eff_proj_neg = [x.negate() for x in eff_proj_neg]
+        eff_proj_neg = [x.negate() for x in eff_proj_neg if x.sign == 1]
 
         action_schema.add_effects(eff_prop + eff_proj_pos + eff_neg + eff_proj_neg)
         schemas.append(action_schema)
