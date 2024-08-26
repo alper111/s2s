@@ -8,7 +8,8 @@ from scipy.spatial.distance import cdist
 from sklearn.tree import DecisionTreeClassifier, _tree
 
 from s2s.structs import (KernelDensityEstimator, KNNDensityEstimator, UniquePredicateList,
-                         Factor, Proposition, ActionSchema, S2SDataset, SupportVectorClassifier)
+                         Factor, Proposition, ActionSchema, S2SDataset, SupportVectorClassifier,
+                         LiftedDecisionTree)
 
 __author__ = 'Steve James and George Konidaris'
 # Modified by Alper Ahmetoglu. Original source:
