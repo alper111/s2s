@@ -129,11 +129,16 @@ class S2SDataset:
 
 
 class UnorderedDataset(torch.utils.data.Dataset):
-    def __init__(self, root_folder: str, transform_action: bool = True):
+    def __init__(self, root_folder: str, transform_action: bool = True, privileged: bool = False):
         self._root_folder = root_folder
-        self._state = np.load(os.path.join(root_folder, "state.npy"), allow_pickle=True)
+        self._privileged = privileged
+        if privileged:
+            self._state = np.load(os.path.join(root_folder, "priv_state.npy"), allow_pickle=True)
+            self._next_state = np.load(os.path.join(root_folder, "priv_next_state.npy"), allow_pickle=True)
+        else:
+            self._state = np.load(os.path.join(root_folder, "state.npy"), allow_pickle=True)
+            self._next_state = np.load(os.path.join(root_folder, "next_state.npy"), allow_pickle=True)
         self._action = pickle.load(open(os.path.join(root_folder, "action.pkl"), "rb"))
-        self._next_state = np.load(os.path.join(root_folder, "next_state.npy"), allow_pickle=True)
         self._transform_action = transform_action
 
     def __len__(self):
