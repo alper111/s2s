@@ -845,7 +845,7 @@ class UniquePredicateList:
 
             for p_i, idx in enumerate(group):
                 prop = self._list[idx]
-                s = prop.estimator.score_samples(masked_obs)
+                s = prop.estimator.score_samples(masked_obs, max_samples_used=max_samples)
                 if object_factored:
                     s = s.reshape(n_sample, n_obj)
                 scores[..., p_i] = s
