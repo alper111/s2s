@@ -4,9 +4,11 @@ from typing import Callable, Optional, Union
 from collections import defaultdict
 import copy
 import os
+import heapq
 
 import numpy as np
 from sklearn.model_selection import GridSearchCV
+from sklearn.svm import SVC
 from sklearn.neighbors import KernelDensity
 from scipy.spatial.distance import cdist
 import torch
@@ -63,7 +65,8 @@ class S2SDataset:
     next state. The dataset can be object-factored or not.
     """
     def __init__(self, state: np.ndarray, option: np.ndarray, reward: np.ndarray,
-                 next_state: np.ndarray, mask: np.ndarray, factors: list[Factor] = None):
+                 next_state: np.ndarray, mask: np.ndarray,
+                 factors: Optional[list[Factor]] = None):
         """
         Create a new dataset.
 
@@ -126,11 +129,16 @@ class S2SDataset:
 
 
 class UnorderedDataset(torch.utils.data.Dataset):
-    def __init__(self, root_folder: str, transform_action: bool = True):
+    def __init__(self, root_folder: str, transform_action: bool = True, privileged: bool = False):
         self._root_folder = root_folder
-        self._state = np.load(os.path.join(root_folder, "state.npy"), allow_pickle=True)
+        self._privileged = privileged
+        if privileged:
+            self._state = np.load(os.path.join(root_folder, "priv_state.npy"), allow_pickle=True)
+            self._next_state = np.load(os.path.join(root_folder, "priv_next_state.npy"), allow_pickle=True)
+        else:
+            self._state = np.load(os.path.join(root_folder, "state.npy"), allow_pickle=True)
+            self._next_state = np.load(os.path.join(root_folder, "next_state.npy"), allow_pickle=True)
         self._action = pickle.load(open(os.path.join(root_folder, "action.pkl"), "rb"))
-        self._next_state = np.load(os.path.join(root_folder, "next_state.npy"), allow_pickle=True)
         self._transform_action = transform_action
 
     def __len__(self):
@@ -182,9 +190,150 @@ class UnorderedDataset(torch.utils.data.Dataset):
         return s, a, s_
 
 
-class KernelDensityEstimator:
+class SupportVectorClassifier:
     """
-    A density estimator that models a distribution over a factor (a set of low-level states).
+    An implementation of a probabilistic classifier that
+    uses support vector machines with Platt scaling.
+    """
+
+    def __init__(self, factors: list[Factor], probabilistic=True):
+        """
+        Create a new SVM classifier for preconditions
+
+        Parameters
+        ----------
+        factor : list[Factor]
+            The factors that the classifier models
+        probabilistic : bool, optional
+            Whether the classifier is probabilistic
+        """
+        self._factors = factors
+        self._probabilistic = probabilistic
+        self._classifier: SVC | None = None
+
+    @property
+    def factors(self) -> list[Factor]:
+        """
+        Get the precondition mask
+        """
+        return self._factors
+
+    @property
+    def variables(self) -> list[int]:
+        variables = []
+        for f in self.factors:
+            variables.extend(f.variables)
+        return variables
+
+    def fit(self, X, y, **kwargs):
+        """
+        Fit the data to the classifier using a grid search
+        for the hyperparameters with cross-validation
+
+        Parameters
+        ----------
+        X : array-like of shape (n_samples, n_features)
+            The input data.
+
+        y : array-like of shape (n_samples,)
+            The target values.
+
+        **kwargs : dict, optional
+            Additional keyword arguments.
+        """
+        c_range = kwargs.get('precondition_c_range', np.logspace(-2, 2, 10))
+        gamma_range = kwargs.get('precondition_gamma_range', np.logspace(-2, 2, 10))
+
+        param_grid = {'gamma': gamma_range, 'C': c_range}
+        grid = GridSearchCV(SVC(class_weight='balanced'), param_grid=param_grid, cv=3, n_jobs=-1)  # 3 fold CV
+        if kwargs.get('masked', False):
+            data = X
+        else:
+            data = X[:, self.variables]
+        grid.fit(data, y)
+
+        if not self._probabilistic:
+            self._classifier = grid.best_estimator_  # we're done
+        else:
+            # we've found the best hyperparams. Now do it again with Platt scaling turned on
+            params = grid.best_params_
+            # Now do Platt scaling with the optimal parameters
+            self._classifier = SVC(probability=True, class_weight='balanced', C=params['C'], gamma=params['gamma'])
+            self._classifier.fit(data, y)
+
+    def probability(self, states: np.ndarray, masked=False) -> float:
+        """
+        Compute the probability of the state given the learned classifier.
+
+        Parameters
+        ----------
+        states : np.ndarray
+            The states.
+
+        Returns
+        -------
+        float
+            The probability of the state according to the classifier.
+        """
+        assert isinstance(self._classifier, SVC), "Classifier not trained yet"
+        if states.ndim == 1:
+            states = states.reshape(1, -1)
+
+        if masked:
+            masked_states = states
+        else:
+            masked_states = states[:, self.variables]
+        if self._probabilistic:
+            return self._classifier.predict_proba(masked_states)[:, 1]
+        else:
+            return self._classifier.predict(masked_states)
+
+
+class DensityEstimator:
+    """
+    Density estimator abstract class that models a distribution over
+    one or more factors (a set of low-level states).
+    """
+
+    def __init__(self, factors: list[Factor]):
+        self._factors = factors
+
+    def fit(self, X: np.ndarray, **kwargs) -> None:
+        pass
+
+    def score_samples(self, X: np.ndarray) -> np.ndarray:
+        pass
+
+    @property
+    def factors(self) -> list[Factor]:
+        return self._factors
+
+    @property
+    def variables(self) -> list[int]:
+        variables = []
+        for f in self.factors:
+            variables.extend(f.variables)
+        return variables
+
+    @property
+    def factor_indices(self) -> dict[Factor, int]:
+        indices = {}
+        it = 0
+        for f in self.factors:
+            n_vars = len(f.variables)
+            rng = list(range(it, n_vars))
+            indices[f] = rng
+            it += len(f)
+        return indices
+
+    def sample(self, n_samples=100) -> np.ndarray:
+        pass
+
+
+class KernelDensityEstimator(DensityEstimator):
+    """
+    Kernel density estimator that models a distribution over one or more
+    factors (a set of low-level states).
     """
 
     def __init__(self, factors: list[Factor]):
@@ -200,7 +349,7 @@ class KernelDensityEstimator:
         -------
         None
         """
-        self._factors = factors
+        super().__init__(factors)
         self._kde: Optional[KernelDensity] = None
 
     def fit(self, X: np.ndarray, **kwargs) -> None:
@@ -245,28 +394,6 @@ class KernelDensityEstimator:
         """
         return self._kde.score_samples(X)
 
-    @property
-    def factors(self) -> list[Factor]:
-        return self._factors
-
-    @property
-    def variables(self) -> list[int]:
-        variables = []
-        for f in self.factors:
-            variables.extend(f.variables)
-        return variables
-
-    @property
-    def factor_indices(self) -> dict[Factor, int]:
-        indices = {}
-        it = 0
-        for f in self.factors:
-            n_vars = len(f.variables)
-            rng = list(range(it, n_vars))
-            indices[f] = rng
-            it += len(f)
-        return indices
-
     def sample(self, n_samples=100) -> np.ndarray:
         """
         Sample data from the density estimator.
@@ -287,41 +414,14 @@ class KernelDensityEstimator:
             data = np.reshape(data, (data.shape[0], 1))
         return data
 
-    def integrate_out(self, factor_list: list[Factor], **kwargs) -> 'KernelDensityEstimator':
-        """
-        Integrate out the given factors from the distribution.
 
-        Parameters
-        ----------
-        factor_list : list[Factor]
-            A list of factors to be marginalized out from the distribution.
-
-        Returns
-        -------
-        KernelDensityEstimator
-            A new distribution equal to the original distribution with the specified factors marginalized out.
-        """
-        rem_factors = []
-        rem_factor_indices = []
-        for f in self.factors:
-            if f not in factor_list:
-                rem_factors.append(f)
-                rem_factor_indices.extend(self.factor_indices[f])
-        n_samples = kwargs.get('estimator_samples', 100)
-        new_samples = self.sample(n_samples)[:, rem_factor_indices]
-        kde = KernelDensityEstimator(factors=rem_factors)
-        kwargs['masked'] = True  # the data has already been masked
-        kde.fit(new_samples, **kwargs)
-        return kde
-
-
-class KNNDensityEstimator:
+class KNNDensityEstimator(DensityEstimator):
     """
-    A density estimator that models a distribution over a factor (a set of low-level states)
-    with a k-nearest neighbors approach.
+    A density estimator that models a distribution over one or more
+    factors (a set of low-level states) with a k-nearest neighbors approach.
     """
 
-    def __init__(self, factors: list[Factor]):
+    def __init__(self, factors: list[Factor], k: int = 5):
         """
         Initialize a new estimator.
 
@@ -329,14 +429,16 @@ class KNNDensityEstimator:
         ----------
         factors : list[Factor]
             The factors that the estimator models.
+        k : int, optional
+            The number of nearest neighbors to consider. Default is 5.
 
         Returns
         -------
         None
         """
-        self._factors = factors
+        super().__init__(factors)
         self._samples: Optional[np.ndarray] = None
-        self._k = 5
+        self._k = k
 
     def fit(self, X: np.ndarray, **kwargs) -> None:
         """
@@ -381,28 +483,6 @@ class KNNDensityEstimator:
         log_prob = -np.mean(knn_dists, axis=1)
         return log_prob
 
-    @property
-    def factors(self) -> list[Factor]:
-        return self._factors
-
-    @property
-    def variables(self) -> list[int]:
-        variables = []
-        for f in self.factors:
-            variables.extend(f.variables)
-        return variables
-
-    @property
-    def factor_indices(self) -> dict[Factor, int]:
-        indices = {}
-        it = 0
-        for f in self.factors:
-            n_vars = len(f.variables)
-            rng = list(range(it, n_vars))
-            indices[f] = rng
-            it += len(f)
-        return indices
-
     def sample(self, n_samples=100) -> np.ndarray:
         """
         Sample data from the density estimator.
@@ -424,40 +504,14 @@ class KNNDensityEstimator:
             data = np.reshape(data, (data.shape[0], 1))
         return data
 
-    # def integrate_out(self, factor_list: list[Factor], **kwargs) -> 'KernelDensityEstimator':
-    #     """
-    #     Integrate out the given factors from the distribution.
-
-    #     Parameters
-    #     ----------
-    #     factor_list : list[Factor]
-    #         A list of factors to be marginalized out from the distribution.
-
-    #     Returns
-    #     -------
-    #     KernelDensityEstimator
-    #         A new distribution equal to the original distribution with the specified factors marginalized out.
-    #     """
-    #     rem_factors = []
-    #     rem_factor_indices = []
-    #     for f in self.factors:
-    #         if f not in factor_list:
-    #             rem_factors.append(f)
-    #             rem_factor_indices.extend(self.factor_indices[f])
-    #     n_samples = kwargs.get('estimator_samples', 100)
-    #     new_samples = self.sample(n_samples)[:, rem_factor_indices]
-    #     kde = KernelDensityEstimator(factors=rem_factors)
-    #     kwargs['masked'] = True  # the data has already been masked
-    #     kde.fit(new_samples, **kwargs)
-    #     return kde
-
 
 class Proposition:
     """
     A predicate over one or more factors.
     """
 
-    def __init__(self, idx: int, name: str, kde: Optional[KernelDensityEstimator]):
+    def __init__(self, idx: int, name: str, estimator: Optional[DensityEstimator],
+                 parameters: Optional[list[(str, str)]] = None):
         """
         Create a new predicate.
 
@@ -467,8 +521,12 @@ class Proposition:
             The index of the predicate.
         name : str
             The name of the predicate.
-        kde : KernelDensityEstimator
+        estimator : DensityEstimator
             The density estimator that models the predicate.
+        parameters : list[(str, str)], optional
+            A list of (name, type) tuples that represent the
+            parameters of the predicate. The type is None if the
+            argument does not have a type.
 
         Returns
         -------
@@ -476,12 +534,13 @@ class Proposition:
         """
         self._idx = idx
         self._name = name
-        self._kde = kde
+        self._estimator = estimator
+        self._parameters = parameters
         self.sign = 1  # whether true or the negation of the predicate
 
     @property
-    def estimator(self) -> Optional[KernelDensityEstimator]:
-        return self._kde
+    def estimator(self) -> Optional[DensityEstimator]:
+        return self._estimator
 
     @property
     def name(self) -> str:
@@ -492,21 +551,25 @@ class Proposition:
         return self._idx
 
     @property
+    def parameters(self) -> list[(str, str)]:
+        return self._parameters
+
+    @property
     def factors(self) -> list[Factor]:
-        # assert isinstance(self._kde, KernelDensityEstimator)
-        return self._kde.factors
+        assert isinstance(self.estimator, DensityEstimator)
+        return self.estimator.factors
 
     @property
     def variables(self) -> list[int]:
-        # assert isinstance(self._kde, KernelDensityEstimator)
-        return self._kde.variables
+        assert isinstance(self.estimator, DensityEstimator)
+        return self.estimator.variables
 
     def sample(self, n_samples) -> np.ndarray:
-        # assert isinstance(self._kde, KernelDensityEstimator)
-        return self._kde.sample(n_samples)
+        assert isinstance(self.estimator, DensityEstimator)
+        return self.estimator.sample(n_samples)
 
     def is_grounded(self) -> bool:
-        return False
+        return self.parameters is None
 
     def is_independent(self) -> bool:
         return len(self.factors) == 1
@@ -519,16 +582,52 @@ class Proposition:
         clone.sign *= -1
         return clone
 
+    def substitute(self, parameters: list[tuple[str, str]]) -> 'Proposition':
+        """
+        Substitute the parameters of the predicate with the given parameters.
+
+        Parameters
+        ----------
+        parameters : list[tuple[str, str]]
+            A list of (name, type) tuples that represent the
+            parameters of the predicate. The type is None if the
+            argument does not have a type.
+
+        Returns
+        -------
+        new_prop : Proposition
+            The new proposition with the substituted parameters.
+        """
+        assert self.parameters is not None, "Predicate has no parameters."
+        clone = copy.copy(self)
+        clone._parameters = parameters
+        return clone
+
     def __repr__(self) -> str:
         return self.__str__()
 
     def __str__(self):
+        if self.parameters is not None:
+            prop_str = f"{self.name}"
+            for p in self.parameters:
+                prop_str += f" ?{p[0]}"
+                if p[1] is not None:
+                    prop_str += f" - {p[1]}"
+        else:
+            prop_str = self.name
+
         if self.sign < 0:
-            return 'not ({})'.format(self.name)
-        return self.name
+            prop_str = f"not ({prop_str})"
+        return prop_str
 
     def __hash__(self):
-        return hash(self._idx)
+        idx = (self._idx,)
+        if self._parameters is not None:
+            idx += tuple(self._parameters)
+        return hash(idx)
+
+    def __eq__(self, other):
+        return hash(self) == hash(other)
 
     @staticmethod
     def not_failed():
@@ -546,7 +645,7 @@ class UniquePredicateList:
     with duplicates.
     """
 
-    def __init__(self, comparator: Optional[Callable[[KernelDensityEstimator, KernelDensityEstimator], bool]] = None,
+    def __init__(self, comparator: Optional[Callable[[DensityEstimator, DensityEstimator], bool]] = None,
                  density_type="knn"):
         """
         Create a list data structure that ensures no duplicates are added to the list.
@@ -568,7 +667,8 @@ class UniquePredicateList:
     def density_type(self):
         return self._density_type
 
-    def append(self, data: np.ndarray, factors: list[Factor]) -> Proposition:
+    def append(self, data: np.ndarray, factors: list[Factor], parameters: list[tuple[str, str]] = None,
+               masked: bool = False, forced: bool = False) -> Proposition:
         """
         Adds a predicate to the predicate list. If the predicate covers multiple factors,
         all possible combinations of projections are added to the vocabulary as well.
@@ -579,17 +679,26 @@ class UniquePredicateList:
             The data on which predicates are fit.
         factors : list[Factor]
             Factors to be modeled.
+        parameters : list[tuple[str, str]], optional
+            A list of (name, type) tuples that represent the
+            parameters of the predicate. The type is None if the
+            argument
+        masked : bool, optional
+            Whether the data is already masked or not.
+        forced : bool, optional
+            Whether to force the addition of the predicate to
+            the vocabulary without checking for duplicates.
 
         Returns
         -------
         base_predicate : Proposition
             The newly created predicate for the given set of factors.
         """
-        if self._density_type == "kde":
+        if self.density_type == "kde":
             item = KernelDensityEstimator(factors)
-        elif self._density_type == "knn":
+        elif self.density_type == "knn":
             item = KNNDensityEstimator(factors)
-        item.fit(data)
+        item.fit(data, masked=masked)
 
         # add all possible projections here.
         # (new_estimator, projected_factor, parent_idx)
@@ -599,17 +708,19 @@ class UniquePredicateList:
         while len(add_queue) > 0:
             estimator, p_factor, parent_idx = add_queue.pop(0)
             # TODO: KD-Tree-like hash function on the estimator?
-            idx = self._get_or_none(estimator)
-            if idx != -1:
+            idx = self._get_or_none(estimator, parameters)
+            if (idx != -1) and (not forced):
                 predicate = self._list[idx]
                 if self.density_type == "knn":
                     # add new samples to the existing estimator
                     new_set = np.concatenate((predicate.estimator._samples, estimator._samples), axis=0)
                     predicate.estimator.fit(new_set, masked=True)
+                if parameters is not None:
+                    predicate = predicate.substitute(parameters)
             else:
                 # create a new predicate for this estimator and add it to the vocabulary
                 idx = len(self._list)
-                predicate = Proposition(idx, f'symbol_{idx}', estimator)
+                predicate = Proposition(idx, f'symbol_{idx}', estimator, parameters)
                 self._list.append(predicate)
                 self._projections.append({})
                 # if there are remaining factors to be projected, add them to the queue
@@ -684,7 +795,8 @@ class UniquePredicateList:
             else:
                 return self.project(symbol, factors[1:])
 
-    def get_active_symbol_indices(self, observation: np.ndarray) -> np.ndarray:
+    def get_active_symbol_indices(self, observation: np.ndarray,
+                                  max_samples: int = 100) -> np.ndarray:
         """
         Get the index of the active symbol for each factor.
 
@@ -692,6 +804,8 @@ class UniquePredicateList:
         ----------
         observation : np.ndarray
             The observation to evaluate.
+        max_samples : int, optional
+            The maximum number of samples to use for scoring. Default is 100.
 
         Returns
         -------
@@ -731,12 +845,72 @@ class UniquePredicateList:
 
             for p_i, idx in enumerate(group):
                 prop = self._list[idx]
-                s = prop.estimator.score_samples(masked_obs)
+                s = prop.estimator.score_samples(masked_obs, max_samples_used=max_samples)
                 if object_factored:
                     s = s.reshape(n_sample, n_obj)
                 scores[..., p_i] = s
 
             indices[..., f_i] = np.argmax(scores, axis=-1)
+        return indices
+
+    def get_topk_symbol_indices(self, observation: np.ndarray, k: int = 5) -> tuple[np.ndarray, np.ndarray]:
+        """
+        Get the most probable k list of symbols in a beam search fashion.
+
+        Parameters
+        ----------
+        observation : np.ndarray
+            The observation to evaluate. shape: (n_obj, n_feature) or (n_feature,)
+        k : int, optional
+            The number of list of symbols to return. Default is 5.
+
+        Returns
+        -------
+        indices : np.ndarray
+            An array of size (k, n_factors) or (k, n_obj, n_factors) containing the index of the
+            active symbol for each factor.
+        scores : np.ndarray
+            An array of size (k,) containing the scores of the top-k symbols.
+        """
+        assert self.mutex_groups is not None, "Mutually exclusive factors are not defined."
+
+        if observation.ndim == 2:
+            n_obj, _ = observation.shape
+            object_factored = True
+        elif observation.ndim == 1:
+            object_factored = False
+        else:
+            raise ValueError("Invalid observation shape.")
+
+        fringe = []
+        for factor in self.mutex_groups:
+            group = self.mutex_groups[factor]
+            n_sym = len(group)
+
+            masked_obs = observation[..., factor.variables]
+            if object_factored:
+                scores = np.zeros((n_obj, n_sym))
+            else:
+                scores = np.zeros(n_sym)
+
+            for p_i, idx in enumerate(group):
+                prop = self[idx]
+                s = prop.estimator.score_samples(masked_obs)
+                scores[..., p_i] = s
+
+            new_fringe = []
+            if len(fringe) == 0:
+                for i in range(n_sym):
+                    heapq.heappush(new_fringe, (-scores[i], [i]))
+            else:
+                for i in range(n_sym):
+                    for p_k, path_k in fringe:
+                        heapq.heappush(new_fringe, (-scores[i]+p_k, path_k + [i]))
+
+            fringe = heapq.nsmallest(k, new_fringe)
+
+        indices = np.array([path for _, path in fringe])
+        # scores = np.array([-p for p, _ in fringe])
         return indices
 
     def fill_mutex_groups(self, factors: list[Factor]) -> None:
@@ -768,9 +942,9 @@ class UniquePredicateList:
         group = self.mutex_groups[factor]
         return self[group[symbol_index]]
 
-    def _get_or_none(self, item) -> int:
+    def _get_or_none(self, item, parameters) -> int:
         for i, x in enumerate(self._list):
-            if self._comparator(item, x.estimator):
+            if self._comparator(item, x.estimator) and (parameters == x.parameters):
                 return i
         return -1
 
@@ -799,6 +973,147 @@ class UniquePredicateList:
         return len(self._list)
 
 
+class LiftedDecisionTree:
+    def __init__(self,
+                 vocabulary: UniquePredicateList,
+                 referencable_indices: list[int],
+                 min_samples_split: int = 10):
+        self.ref_indices = referencable_indices
+        self.vocabulary = vocabulary
+        self.min_samples_split = min_samples_split
+        self.nodes = {}
+        self.leaves = {}
+
+    def fit(self, x, y):
+        x = self._translate(x)
+        self._build_tree(x, y)
+
+    def extract_preconditions(self):
+        assert len(self.nodes) > 0, "Decision tree not trained yet."
+        preconditions = []
+        pos_leaves = [x[0] for x in self.leaves.values() if x[1] > 0.6]
+        for branch in pos_leaves:
+            pre = []
+            a_it = 0
+            for node in branch:
+                (o_id, f_i), s_i = node
+                sym = self.vocabulary.get_by_index(f_i, s_i)
+
+                if o_id == -1:
+                    sym = sym.substitute([(f"a{a_it}", None)])
+                    a_it += 1
+                else:
+                    sym = sym.substitute([(f"x{o_id}", None)])
+                pre.append(sym)
+            preconditions.append(pre)
+        return preconditions
+
+    # def decision_path(self, x):
+    #     x = self._translate(x)
+    #     decisions = []
+    #     for v in self.nodes:
+    #         masks = self._get_decision_masks(self.nodes[v], x)
+    #         decisions.append(masks.astype(int))
+    #     return np.stack(decisions, axis=1)
+
+    # def predict(self, x):
+    #     g = self.decision_path(x)
+    #     y = np.zeros(len(x))
+    #     for i, path in enumerate(g):
+    #         v = 0
+    #         for d_j in path:
+    #             if v not in self.nodes:
+    #                 break
+    #             if d_j == 0:
+    #                 v = 2*v + 1
+    #             else:
+    #                 v = 2*v + 2
+    #         y[i] = self.leaves[v][1]
+    #     return y
+
+    def _translate(self, x):
+        x = self.vocabulary.get_active_symbol_indices(x)
+        symbols = np.zeros_like(x)
+        for i, f_i in enumerate(self.vocabulary.factors):
+            group = np.array(self.vocabulary.mutex_groups[f_i])
+            symbols[..., i] = group[x[..., i]]
+        return symbols
+
+    def _build_tree(self, x, y):
+        queue = [((0, -1), [], x, y)]
+        v_count = 1
+        while len(queue) > 0:
+            (v_idx, parent), rules, x, y = queue.pop(0)
+            rule, child_masks = self._compute_best_rule(x, y)
+            if rule is None:
+                self.leaves[(v_idx, parent)] = (rules, y.mean())
+                continue
+
+            self.nodes[(v_idx, parent)] = rule
+            for c_i, mask in enumerate(child_masks):
+                child_rule = (rule, c_i)
+                n_child = mask.sum()
+                if n_child >= self.min_samples_split:
+                    queue.append(((v_count, v_idx), rules + [child_rule], x[mask], y[mask]))
+                    v_count += 1
+                elif n_child > 0:
+                    self.leaves[(v_count, v_idx)] = (rules + [child_rule], y[mask].mean())
+                    v_count += 1
+
+    def _compute_best_rule(self, x, y):
+        best_rule = None
+        best_child_masks = None
+        best_info_gain = 1e-8
+        for rule in self._get_valid_rules():
+            info_gain, child_masks = self._compute_info_gain(rule, x, y)
+            if info_gain > best_info_gain:
+                best_rule = rule
+                best_child_masks = child_masks
+                best_info_gain = info_gain
+        return best_rule, best_child_masks
+
+    def _get_valid_rules(self):
+        rules = []
+        for i, _ in enumerate(self.vocabulary.factors):
+            for o_x in self.ref_indices:
+                rules.append((o_x, i))
+            rules.append((-1, i))
+        return rules
+
+    def _compute_info_gain(self, rule, x, y):
+        child_masks = self._get_decision_masks(rule, x)
+        n = len(y)
+        child_entropy = 0.0
+        for mask in child_masks:
+            n_i = len(y[mask])
+            if n_i == 0:
+                continue
+            child_entropy += (n_i/n)*self._entropy(y[mask])
+        info_gain = self._entropy(y) - child_entropy
+        return info_gain, child_masks
+
+    def _get_decision_masks(self, rule, x):
+        o_i, f_i = rule
+        syms = self.vocabulary.mutex_groups[self.vocabulary.factors[f_i]]
+        child_masks = []
+        for s_i in syms:
+            if o_i == -1:
+                mask = (x[:, :, f_i] == s_i).any(axis=1)
+            else:
+                mask = (x[:, o_i, f_i] == s_i)
+            child_masks.append(mask)
+        return child_masks
+
+    @staticmethod
+    def _entropy(y):
+        if len(y) == 0:
+            return 0
+        p = np.mean(y)
+        if (p < 1e-8) or (p > 1 - 1e-8):
+            return 0
+        return -p*np.log2(p) - (1-p)*np.log2(1-p)
+
+
 class ActionSchema:
     """
     An action schema in PDDL. An action schema is a template for an action that can be instantiated
@@ -820,8 +1135,6 @@ class ActionSchema:
         self.name = name.replace(' ', '-')
         self.preconditions = []
         self.effects = []
-        self.obj_preconditions = {}
-        self.obj_effects = defaultdict(list)
 
     def add_preconditions(self, predicates: list[Proposition]) -> None:
         """
@@ -838,26 +1151,7 @@ class ActionSchema:
         """
         self.preconditions.extend(predicates)
 
-    def add_obj_preconditions(self, obj_idx: str, predicates: list[Proposition]) -> None:
-        """
-        Add object-specific preconditions to the action schema.
-
-        Parameters
-        ----------
-        obj_idx : str
-            The object index.
-        predicates : list[Proposition]
-            The preconditions to add.
-
-        Returns
-        -------
-        None
-        """
-        if obj_idx not in self.obj_preconditions:
-            self.obj_preconditions[obj_idx] = []
-        self.obj_preconditions[obj_idx].extend(predicates)
-
-    def add_effect(self, effect: list[Proposition], probability: float = 1) -> None:
+    def add_effects(self, effects: list[Proposition]) -> None:
         """
         Add effects to the action schema.
 
@@ -865,33 +1159,12 @@ class ActionSchema:
         ----------
         effect : list[Proposition]
             The effects to add.
-        probability : float, optional
-            The probability of the effect. Default is 1.
 
         Returns
         -------
         None
         """
-        self.effects.append((probability, effect))
-
-    def add_obj_effect(self, obj_idx: str, effect: list[Proposition], probability: float = 1):
-        """
-        Add object-specific effects to the action schema.
-
-        Parameters
-        ----------
-        obj_idx : str
-            The object index.
-        effect : list[Proposition]
-            The effects to add.
-        probability : float, optional
-            The probability of the effect. Default is 1.
-
-        Returns
-        -------
-        None
-        """
-        self.obj_effects[obj_idx].append((probability, effect))
+        self.effects.extend(effects)
 
     def is_probabilistic(self):
         # TODO: no probabilistic effects for now
@@ -907,29 +1180,21 @@ class ActionSchema:
         if len(self.preconditions) > 0:
             precondition += _proposition_to_str(self.preconditions)
         if len(self.effects) > 0:
-            effects = max(self.effects, key=lambda x: x[0])
-            effect += _proposition_to_str(effects[1], None)
+            effect += _proposition_to_str(self.effects)
+        params = []
+        for prop in self.preconditions + self.effects:
+            if prop.parameters is not None:
+                for param in prop.parameters:
+                    if param not in params:
+                        params.append(param)
+
         parameters = []
-        for name in self.obj_preconditions:
-            if len(self.obj_preconditions[name]) == 0:
-                continue
-            parameters.append(name)
-            if len(precondition) > 0:
-                precondition += " "
-            precondition += _proposition_to_str(self.obj_preconditions[name], name)
-
-        for name in self.obj_effects:
-            max_effect = max(self.obj_effects[name], key=lambda x: x[0])
-            if len(max_effect[1]) == 0:
-                continue
-
-            if name not in parameters:
-                parameters.append(name)
-            if len(effect) > 0:
-                effect += " "
-
-            effect += _proposition_to_str(max_effect[1], name)
-        parameters = " ".join([f"?{name}" for name in parameters])
+        for param in params:
+            if param[1] is not None:
+                parameters.append(f"?{param[0]} - {param[1]}")
+            else:
+                parameters.append(f"?{param[0]}")
+        parameters = " ".join(parameters)
 
         schema = f"(:action {self.name}\n" + \
                  f"\t:parameters ({parameters})\n" + \
@@ -938,27 +1203,11 @@ class ActionSchema:
         return schema
 
 
-def _proposition_to_str(proposition: Union[Proposition, list[Proposition]], name: str = None) -> str:
+def _proposition_to_str(proposition: Union[Proposition, list[Proposition]]) -> str:
     if isinstance(proposition, Proposition):
-        prop = proposition.name
-        if name is not None:
-            prop = f"{prop} ?{name}"
-        if proposition.sign < 0:
-            return f"(not ({prop}))"
+        return f"({proposition})"
     elif isinstance(proposition, list):
-        if len(proposition) == 0:
-            return ""
-
-        props = []
-        for prop in proposition:
-            p = prop.name
-            if name is not None:
-                p = f"{p} ?{name}"
-            if prop.sign < 0:
-                props.append(f"(not ({p}))")
-            else:
-                props.append(f"({p})")
-        return " ".join(props)
+        return " ".join([f"({p})" for p in proposition])
 
 
 class PDDLDomain:

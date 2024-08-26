@@ -21,10 +21,11 @@ class NPuzzle(gym.Env):
 
         self._data = dataset.data.numpy()
         _labels = dataset.targets.numpy()
-        self._labels = {i: np.where(_labels == i)[0] for i in range(10)}
+        self._labels = {i: np.where(_labels == i)[0] for i in range(9)}
 
         self._digit_idx = None
-        self._location = None
+        self._directions = np.array([[0, 1], [-1, 0], [0, -1], [1, 0]])
+
         self._t = None
         self._size = 3
         self._random = random
@@ -42,7 +43,7 @@ class NPuzzle(gym.Env):
         self._feat_dim = 28*28
         self._last_obs = None
         self.observation_space = None
-        self.action_space = gym.spaces.Discrete(4)
+        self.action_space = gym.spaces.Tuple([gym.spaces.Discrete(4), gym.spaces.Discrete(8)])
         self.reset()
 
     @property
@@ -85,8 +86,11 @@ class NPuzzle(gym.Env):
 
         self._init_digits()
 
-        zero_loc = np.where(perm == 0)[0]
-        self._location = [zero_loc // self._size, zero_loc % self._size]
+        self._locations = []
+        for i, digit in enumerate(perm):
+            self._locations.append((i // self._size, i % self._size))
+            if digit == 0:
+                self._empty_index = i
         self._permutation = perm.reshape(self._size, self._size)
         self._t = 0
 
@@ -104,43 +108,34 @@ class NPuzzle(gym.Env):
         return obs
 
     def step(self, action):
-        row, col = self._location
-        action_success = False
-        if action == 0:
-            if self._location[1] != self._size-1:
-                dx = row
-                dy = col + 1
-                action_success = True
-        elif action == 1:
-            if self._location[0] != 0:
-                dx = row-1
-                dy = col
-                action_success = True
-        elif action == 2:
-            if self._location[1] != 0:
-                dx = row
-                dy = col-1
-                action_success = True
-        elif action == 3:
-            if self._location[0] != self._size-1:
-                dx = row + 1
-                dy = col
-                action_success = True
-
-        if action_success:
-            self._location[0] = dx
-            self._location[1] = dy
-            self._permutation[row, col] = self._permutation[dx, dy]
-            self._permutation[dx, dy] = 0
-
         self._t += 1
+        dir, index = action
+        x, y = self._locations[index]
+        dx, dy = self._directions[dir]
+
+        # if hit the limits
+        if x+dx < 0 or x+dx >= self._size or y+dy < 0 or y+dy >= self._size:
+            info = self.info
+            info["action_success"] = False
+            return self.observation, self.reward, self.done, info
+
+        # if the empty tile is not in the direction of the action
+        if self._permutation[x+dx, y+dy] != 0:
+            info = self.info
+            info["action_success"] = False
+            return self.observation, self.reward, self.done, info
+
+        self._permutation[x+dx, y+dy] = self._permutation[x, y]
+        self._permutation[x, y] = 0
+        self._locations[index] = (x+dx, y+dy)
+        self._locations[self._empty_index] = (x, y)
 
         obs = self.observation
         info = self.info
         reward = self.reward
         done = self.done
         self._last_obs = obs
-        info["action_success"] = action_success
+        info["action_success"] = True
 
         if self.render_mode == "human":
             self._render_frame()
@@ -148,7 +143,19 @@ class NPuzzle(gym.Env):
         return obs, reward, done, info
 
     def sample_action(self) -> int:
-        return np.random.randint(0, 4)
+        actions = []
+        e_idx = self._permutation.reshape(-1).tolist().index(0)
+        ex, ey = e_idx // self._size, e_idx % self._size
+        for i, (x, y) in enumerate(self._locations):
+            if x == ex and y == (ey-1):
+                actions.append((0, i))
+            if x == (ex+1) and y == ey:
+                actions.append((1, i))
+            if x == ex and y == (ey+1):
+                actions.append((2, i))
+            if x == (ex-1) and y == ey:
+                actions.append((3, i))
+        return actions[np.random.randint(len(actions))]
 
     def render(self):
         if self.render_mode == "rgb_array":
@@ -175,12 +182,11 @@ class NPuzzle(gym.Env):
             if self._last_obs is not None:
                 last_obs = np.stack(list(self._last_obs["objects"].values()))
                 indices = self._match_indices(last_obs, obs)
-                assert set(indices) == set(np.random.permutation(self._num_tile))
                 obs = np.stack([obs[i] for i in indices])
         return obs
 
     def _get_info(self):
-        return {"location": self._location, "permutation": self._permutation}
+        return {"permutation": self._permutation}
 
     def _get_reward(self):
         return float(np.sum(self._permutation.reshape(-1) == np.arange(self._num_tile))
@@ -222,11 +228,11 @@ class NPuzzle(gym.Env):
 
     def _render_tiles(self):
         objects = []
-        for i in range(self._size):
-            for j in range(self._size):
-                digit = self._permutation[i][j]
-                tile = self._draw_digit(digit)
-                objects.append((tile, i, j))
+        for loc in self._locations:
+            i, j = loc
+            digit = self._permutation[i, j]
+            tile = self._draw_digit(digit)
+            objects.append((tile, i, j))
         return objects
 
     def _draw_digit(self, digit: int) -> np.ndarray:
@@ -255,6 +261,7 @@ class NPuzzle(gym.Env):
 class NPuzzleDataset(UnorderedDataset):
     @staticmethod
     def _actions_to_label(action, key_order):
+        action_type, index = action
         a = torch.zeros(len(key_order)+1, dtype=torch.long)
-        a[0] = action
+        a[index+1] = action_type + 1
         return a
