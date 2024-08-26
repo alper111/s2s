@@ -65,7 +65,8 @@ class S2SDataset:
     next state. The dataset can be object-factored or not.
     """
     def __init__(self, state: np.ndarray, option: np.ndarray, reward: np.ndarray,
-                 next_state: np.ndarray, mask: np.ndarray, factors: list[Factor] = None):
+                 next_state: np.ndarray, mask: np.ndarray,
+                 factors: Optional[list[Factor]] = None):
         """
         Create a new dataset.
 
