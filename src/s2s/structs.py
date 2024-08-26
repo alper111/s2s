@@ -569,7 +569,7 @@ class Proposition:
         return self.estimator.sample(n_samples)
 
     def is_grounded(self) -> bool:
-        return False
+        return self.parameters is None
 
     def is_independent(self) -> bool:
         return len(self.factors) == 1
@@ -795,7 +795,8 @@ class UniquePredicateList:
             else:
                 return self.project(symbol, factors[1:])
 
-    def get_active_symbol_indices(self, observation: np.ndarray) -> np.ndarray:
+    def get_active_symbol_indices(self, observation: np.ndarray,
+                                  max_samples: int = 100) -> np.ndarray:
         """
         Get the index of the active symbol for each factor.
 
@@ -803,6 +804,8 @@ class UniquePredicateList:
         ----------
         observation : np.ndarray
             The observation to evaluate.
+        max_samples : int, optional
+            The maximum number of samples to use for scoring. Default is 100.
 
         Returns
         -------
