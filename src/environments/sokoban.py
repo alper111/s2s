@@ -1,4 +1,5 @@
 from typing import Optional
+from collections import defaultdict
 import os
 
 import gym.spaces
@@ -7,7 +8,6 @@ import torch
 import torchvision
 import gym
 import pygame
-from scipy.spatial.distance import cdist
 
 from s2s.structs import UnorderedDataset
 from s2s.helpers import dict_to_transition
@@ -39,7 +39,7 @@ class Sokoban(gym.Env):
         self._map = None
         self._digit_idx = None
         self._agent_loc = None
-        self._delta = np.array([[0, 1], [-1, 0], [0, -1], [1, 0], [0, 0]])
+        self._delta = np.array([[0, 1], [-1, 0], [0, -1], [1, 0]])
         self._t = 0
 
         script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -61,11 +61,12 @@ class Sokoban(gym.Env):
         obs = self._get_obs()
         if self.object_centric:
             obs_dict = {}
-            objs = {i: obj for i, obj in enumerate(obs)}
-            obs_dict["objects"] = objs
-            obs_dict["dimensions"] = {"objects": 1026}
+            obs_dict["global"] = obs["global"]
+            del obs["global"]
+            obs_dict["objects"] = obs
+            obs_dict["dimensions"] = {"objects": 3*3*32*32, "global": len(obs_dict["global"][0])}
             return obs_dict
-        return self._get_obs()
+        return obs
 
     @property
     def reward(self) -> float:
@@ -83,10 +84,15 @@ class Sokoban(gym.Env):
     def object_centric(self) -> bool:
         return self._object_centric
 
+    @property
+    def agent_pos(self) -> np.ndarray:
+        return self._agent_loc
+
     def reset(self) -> np.ndarray:
         self._init_agent_mark()
         self._init_x_mark()
         self._init_digits()
+        self._init_wall_mark()
         self._last_obs = None
 
         if self._map_file is not None:
@@ -96,7 +102,7 @@ class Sokoban(gym.Env):
         self._shape = (len(self._map), len(self._map[0]))
 
         if self.object_centric:
-            self.observation_space = gym.spaces.Box(low=0, high=1, shape=(self._max_objects, 32*32+2,))
+            self.observation_space = gym.spaces.Box(low=0, high=max(self._shape)-1, shape=(self._max_objects, 32*32+2,))
         else:
             self.observation_space = gym.spaces.Box(low=0, high=1, shape=(32*self._shape[0], 32*self._shape[1]))
 
@@ -141,7 +147,13 @@ class Sokoban(gym.Env):
             self._agent_loc = next_pos
         # the next tile is a wall
         elif next_tile == "#":
-            pass
+            self._t += 1
+            obs = self.observation
+            info = self.info
+            reward = self.reward
+            done = self.done
+            info["action_success"] = False
+            return obs, reward, done, info
         # the next tile contains a crate
         else:
             # check whether the crate can be pushed
@@ -154,6 +166,22 @@ class Sokoban(gym.Env):
                     self._map[next_pos[0]][next_pos[1]] = (next_bg, "@")
                     self._map[further_pos[0]][further_pos[1]] = (further_bg, next_tile)
                     self._agent_loc = next_pos
+                else:
+                    self._t += 1
+                    obs = self.observation
+                    info = self.info
+                    reward = self.reward
+                    done = self.done
+                    info["action_success"] = False
+                    return obs, reward, done, info
+            else:
+                self._t += 1
+                obs = self.observation
+                info = self.info
+                reward = self.reward
+                done = self.done
+                info["action_success"] = False
+                return obs, reward, done, info
 
         self._t += 1
 
@@ -202,6 +230,9 @@ class Sokoban(gym.Env):
             np.random.randint(24, 31)
         ]
 
+    def _init_wall_mark(self):
+        self._w_corners = self._get_random_wall_mark()
+
     def _init_digits(self):
         self._digit_idx = np.zeros(10, dtype=np.int64)
         for i in self._labels:
@@ -212,7 +243,7 @@ class Sokoban(gym.Env):
         canvas = pygame.Surface((self._shape[1]*32, self._shape[0]*32))
         canvas.fill((0, 0, 0))
         for obj in objects:
-            bg, fg, i, j = obj
+            _, _, bg, fg, i, j = obj
             if bg is not None:
                 canvas.blit(bg, (j*32, i*32))
             if fg is not None:
@@ -233,18 +264,36 @@ class Sokoban(gym.Env):
             self._clock.tick(self.metadata["render_fps"])
 
         if self.object_centric:
-            entities = []
+            entities = {}
+            positions = []
+            _draw_cache = defaultdict(lambda: np.zeros((32, 32), dtype=np.uint8))
             for obj in objects:
-                bg, fg, i, j = obj
-                if bg is not None:
-                    arr = np.transpose(pygame.surfarray.array3d(bg)[:, :, 0], (1, 0))
-                    x = np.concatenate([arr.reshape(-1), [i], [j]]).astype(np.uint8)
-                    entities.append(x)
-                if fg is not None:
-                    arr = np.transpose(pygame.surfarray.array3d(fg)[:, :, 0], (1, 0))
-                    x = np.concatenate([arr.reshape(-1), [i], [j]]).astype(np.uint8)
-                    entities.append(x)
-            entities = np.stack(entities)
+                bg, fg, _, fg_img, i, j = obj
+                if fg_img is not None:
+                    _draw_cache[(i, j)] = np.transpose(pygame.surfarray.array3d(fg_img)[:, :, 0], (1, 0))
+            for obj in objects:
+                bg, fg, _, fg_img, i, j = obj
+                # if it's a digit or the agent (i.e., an object)
+                if (fg != " ") and (fg != "#"):
+                    top_left = _draw_cache[(i-1, j-1)]
+                    top_center = _draw_cache[(i-1, j)]
+                    top_right = _draw_cache[(i-1, j+1)]
+                    center_left = _draw_cache[(i, j-1)]
+                    center = _draw_cache[(i, j)]
+                    center_right = _draw_cache[(i, j+1)]
+                    bottom_left = _draw_cache[(i+1, j-1)]
+                    bottom_center = _draw_cache[(i+1, j)]
+                    bottom_right = _draw_cache[(i+1, j+1)]
+                    top = np.concatenate([top_left, top_center, top_right], axis=1)
+                    center = np.concatenate([center_left, center, center_right], axis=1)
+                    bottom = np.concatenate([bottom_left, bottom_center, bottom_right], axis=1)
+                    entities[fg] = np.concatenate([top, center, bottom], axis=0).reshape(-1)
+                    if fg != "@":
+                        positions.append(np.array([i, j]))
+                    else:
+                        positions.insert(0, np.array([i, j]))
+            positions = np.concatenate(positions)
+            entities["global"] = {0: positions}
             return entities
         else:
             return np.transpose(pygame.surfarray.array3d(canvas)[:, :, 0], (1, 0)).astype(np.uint8)
@@ -261,32 +310,70 @@ class Sokoban(gym.Env):
                     bg_tile = self._draw_digit(0)
 
                 if fg == "#":
-                    color = (80, 80, 80)
-                    fg_tile = pygame.Surface((32, 32))
-                    fg_tile.fill(color)
+                    # color = (80, 80, 80)
+                    # fg_tile = pygame.Surface((32, 32))
+                    # fg_tile.fill(color)
+                    fg_tile = self._draw_wall(bg_tile)
                 elif fg == "@":
-                    fg_tile = self._draw_agent()
+                    fg_tile = self._draw_agent(bg_tile)
                 elif fg != " ":
                     digit = int(self._map[i][j][1])
                     fg_tile = self._draw_digit(digit)
                     if bg == "0":
-                        cross = self._draw_cross()
-                        fg_tile.blit(cross, (0, 0))
+                        fg_tile = self._draw_cross(fg_tile)
 
-                objects.append((bg_tile, fg_tile, i, j))
+                objects.append((bg, fg, bg_tile, fg_tile, i, j))
         return objects
 
     def _get_obs(self) -> np.ndarray:
         obs = self._render_frame()
-        if self.object_centric:
-            if self._last_obs is not None:
-                last_obs = np.stack(list(self._last_obs["objects"].values()))
-                indices = self._match_indices(last_obs, obs)
-                obs = np.stack([obs[i] for i in indices])
         return obs
 
     def _get_info(self) -> dict:
-        return {"map": self._map}
+        priv_obs = {}
+        positions = [self.agent_pos]
+        vec_map = {
+            "0": np.array([0, 1]),
+            "1": np.array([1, 0]),
+            "2": np.array([1, 0]),
+            "3": np.array([1, 0]),
+            "4": np.array([1, 0]),
+            "5": np.array([1, 0]),
+            "6": np.array([1, 0]),
+            "7": np.array([1, 0]),
+            "8": np.array([1, 0]),
+            "9": np.array([1, 0]),
+            "@": np.array([2, 0]),
+            "#": np.array([-1, 0]),
+            " ": np.array([0, 0]),
+        }
+
+        def get_vec(bg, fg):
+            bg_vec = vec_map[bg]
+            fg_vec = vec_map[fg]
+            return bg_vec + fg_vec
+
+        for i in range(self._shape[0]):
+            for j in range(self._shape[1]):
+                _, fg = self._map[i][j]
+                if (fg != " ") and (fg != "#"):
+                    top_left = get_vec(self._map[i-1][j-1][0], self._map[i-1][j-1][1])
+                    top_center = get_vec(self._map[i-1][j][0], self._map[i-1][j][1])
+                    top_right = get_vec(self._map[i-1][j+1][0], self._map[i-1][j+1][1])
+                    center_left = get_vec(self._map[i][j-1][0], self._map[i][j-1][1])
+                    center = get_vec(self._map[i][j][0], self._map[i][j][1])
+                    center_right = get_vec(self._map[i][j+1][0], self._map[i][j+1][1])
+                    bottom_left = get_vec(self._map[i+1][j-1][0], self._map[i+1][j-1][1])
+                    bottom_center = get_vec(self._map[i+1][j][0], self._map[i+1][j][1])
+                    bottom_right = get_vec(self._map[i+1][j+1][0], self._map[i+1][j+1][1])
+                    priv_obs[fg] = np.concatenate([top_left, top_center, top_right,
+                                                   center_left, center, center_right,
+                                                   bottom_left, bottom_center, bottom_right], axis=0)
+                    if fg != "@":
+                        positions.append(np.array([i, j]))
+        positions = np.concatenate(positions)
+        return {"objects": priv_obs, "global": {0: positions},
+                "dimensions": {"objects": 3*3*2, "global": len(positions)}}
 
     def _get_reward(self) -> float:
         n_crossed = 0
@@ -311,14 +398,14 @@ class Sokoban(gym.Env):
         digit = pygame.transform.scale(digit, (32, 32))
         return digit
 
-    def _draw_cross(self) -> pygame.Surface:
+    def _draw_cross(self, canvas: Optional[pygame.Surface]) -> pygame.Surface:
         if self.rand_x:
             self._init_x_mark()
         color = (255, 255, 255)
         width = 4
-        return self._draw_lines([self._x_corners[:4], self._x_corners[4:]], color, width)
+        return self._draw_lines([self._x_corners[:4], self._x_corners[4:]], color, width, canvas)
 
-    def _draw_agent(self) -> pygame.Surface:
+    def _draw_agent(self, canvas: Optional[pygame.Surface]) -> pygame.Surface:
         if self.rand_agent:
             self._init_agent_mark()
         color = (255, 255, 255)
@@ -326,25 +413,31 @@ class Sokoban(gym.Env):
         return self._draw_lines([[self._a_corners[0], self._a_corners[1], self._a_corners[2], self._a_corners[3]],
                                  [self._a_corners[0], self._a_corners[1], self._a_corners[4], self._a_corners[5]],
                                  [self._a_corners[2], self._a_corners[3], self._a_corners[4], self._a_corners[5]]],
-                                color, width)
+                                color, width, canvas)
 
-    def _draw_lines(self, lines: list[list[int]], color: tuple[int, int, int], width: int) -> pygame.Surface:
-        canvas = pygame.Surface((32, 32))
+    def _draw_wall(self, canvas: Optional[pygame.Surface]) -> pygame.Surface:
+        if self.rand_x:
+            self._init_wall_mark()
+        color = (255, 255, 255)
+        width = 4
+        return self._draw_lines(np.array(self._w_corners).reshape(-1, 4).tolist(), color, width, canvas)
+
+    def _draw_lines(self, lines: list[list[int]],
+                    color: tuple[int, int, int], width: int,
+                    canvas: Optional[pygame.Surface]) -> pygame.Surface:
+        shaded_color = (color[0]//2, color[1]//2, color[2]//2)
+        if canvas is None:
+            canvas = pygame.Surface((32, 32))
+
         for line in lines:
-            pygame.draw.line(canvas, color, line[:2], line[2:], width)
-            pygame.draw.circle(canvas, color, line[:2], width//2)
-            pygame.draw.circle(canvas, color, line[2:], width//2)
+            pygame.draw.line(canvas, shaded_color, line[:2], line[2:], width)
+            pygame.draw.circle(canvas, shaded_color, line[:2], width//2)
+            pygame.draw.circle(canvas, shaded_color, line[2:], width//2)
+        for line in lines:
+            pygame.draw.line(canvas, color, line[:2], line[2:], width-1)
+            pygame.draw.circle(canvas, color, line[:2], width//2-1)
+            pygame.draw.circle(canvas, color, line[2:], width//2-1)
         return canvas
-
-    def _match_indices(self, state, next_state) -> np.ndarray:
-        # TODO
-        # normally, we need to figure out which entity maps to which one
-        # e.g., maybe with something like the Hungarian algorithm
-        feat, _ = state[:, :self._feat_dim], state[:, self._feat_dim:]
-        feat_n, _ = next_state[:, :self._feat_dim], next_state[:, self._feat_dim:]
-        dists = cdist(feat.astype(float) / 255.0, feat_n.astype(float) / 255.0)
-        indices = np.argmin(dists, axis=-1)
-        return indices
 
     @property
     def map(self) -> np.ndarray:
@@ -378,16 +471,22 @@ class Sokoban(gym.Env):
         assert max_crates < 10, "The number of crates must be less than 10"
 
         _map = [[(" ", " ") for _ in range(nj)] for _ in range(ni)]
+        for i in range(ni):
+            _map[i][0] = ("#", "#")
+            _map[i][-1] = ("#", "#")
+        for j in range(nj):
+            _map[0][j] = ("#", "#")
+            _map[-1][j] = ("#", "#")
 
-        n = np.random.randint(1, max_crates+1)
-        digits = np.random.randint(1, 10, n)
-        locations = np.random.permutation((ni-2)*(nj-2))[:(2*n+1)]
+        n = np.random.randint(min_crates, max_crates+1)
+        digits = np.random.choice(range(1, 10), n, replace=False)
+        locations = np.random.permutation((ni-4)*(nj-4))[:(2*n+1)]
         for i, x_i in enumerate(digits):
-            di, dj = locations[i] // (nj-2) + 1, locations[i] % (nj-2) + 1
+            di, dj = locations[i] // (nj-4) + 2, locations[i] % (nj-4) + 2
             _map[di][dj] = (" ", str(x_i))
-            di, dj = locations[i+n] // (nj-2) + 1, locations[i+n] % (nj-2) + 1
+            di, dj = locations[i+n] // (nj-4) + 2, locations[i+n] % (nj-4) + 2
             _map[di][dj] = ("0", " ")
-        ax, ay = locations[-1] // (nj-2) + 1, locations[-1] % (nj-2) + 1
+        ax, ay = locations[-1] // (nj-4) + 2, locations[-1] % (nj-4) + 2
         _map[ax][ay] = (" ", "@")
         return _map
 
@@ -395,12 +494,37 @@ class Sokoban(gym.Env):
     def get_delta_mask(state: np.ndarray, next_state: np.ndarray) -> np.ndarray:
         return state != next_state
 
+    @staticmethod
+    def _get_random_wall_mark():
+        return np.array([
+            np.random.randint(2, 4),
+            np.random.randint(7, 12),
+            np.random.randint(28, 30),
+            np.random.randint(7, 12),
+
+            np.random.randint(2, 4),
+            np.random.randint(20, 25),
+            np.random.randint(28, 30),
+            np.random.randint(20, 25),
+
+            np.random.randint(7, 12),
+            np.random.randint(2, 4),
+            np.random.randint(7, 12),
+            np.random.randint(28, 30),
+
+            np.random.randint(20, 25),
+            np.random.randint(2, 4),
+            np.random.randint(20, 25),
+            np.random.randint(28, 30),
+        ]).reshape(-1, 4)
+
 
 class SokobanDataset(UnorderedDataset):
     def __getitem__(self, idx):
         x, x_, key_order = dict_to_transition(self._state[idx], self._next_state[idx])
-        x = self._normalize_imgs(x)
-        x_ = self._normalize_imgs(x_)
+        if not self._privileged:
+            x = self._normalize_imgs(x)
+            x_ = self._normalize_imgs(x_)
         if self._transform_action:
             a = self._actions_to_label(self._action[idx], key_order)
         else:
@@ -408,7 +532,7 @@ class SokobanDataset(UnorderedDataset):
         return x, a, x_
 
     def _normalize_imgs(self, x):
-        x["objects"][..., :1024] = x["objects"][..., :1024] / 255.0
+        x["objects"] = x["objects"] / 255.0
         return x
 
     @staticmethod
