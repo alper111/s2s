@@ -28,7 +28,7 @@ def dict_to_transition(state: dict, next_state: dict) -> tuple[dict, dict, list]
     key_order : list
         The order of keys in the state tensor.
     """
-    modalities = [m for m in state.keys() if m != "dimensions"]
+    modalities = [m for m in state["dimensions"].keys() if m != "global"]
     state_dict = {}
     next_state_dict = {}
     key_order = []
