@@ -651,7 +651,8 @@ class UniquePredicateList:
     """
 
     def __init__(self, comparator: Optional[Callable[[DensityEstimator, DensityEstimator], bool]] = None,
-                 density_type="knn"):
+                 density_type="knn",
+                 symbol_prefix: str = "symbol_"):
         """
         Create a list data structure that ensures no duplicates are added to the list.
 
@@ -662,6 +663,7 @@ class UniquePredicateList:
         """
         self._comparator = comparator if comparator is not None else lambda x, y: x is y
         self._density_type = density_type
+        self._prefix = symbol_prefix
         self._list = []
         self._projections: list[dict[int, Optional[int]]] = []
         self.mutex_groups = None
@@ -725,7 +727,7 @@ class UniquePredicateList:
             else:
                 # create a new predicate for this estimator and add it to the vocabulary
                 idx = len(self._list)
-                predicate = Proposition(idx, f'symbol_{idx}', estimator, parameters)
+                predicate = Proposition(idx, f'{self._prefix}{idx}', estimator, parameters)
                 self._list.append(predicate)
                 self._projections.append({})
                 # if there are remaining factors to be projected, add them to the queue
@@ -976,6 +978,14 @@ class UniquePredicateList:
 
     def __len__(self):
         return len(self._list)
+
+    def __repr__(self) -> str:
+        return self.__str__()
+
+    def __str__(self) -> str:
+        if len(self) < 10:
+            return f"UniquePredicateList({str(self._list)})"
+        return f"UniquePredicateList([{str(self._list[0])}, ..., {str(self._list[-1])}], size={len(self)})"
 
 
 class LiftedDecisionTree:
