@@ -568,6 +568,7 @@ class Proposition:
         assert isinstance(self.estimator, DensityEstimator)
         return self.estimator.sample(n_samples)
 
+    @property
     def is_grounded(self) -> bool:
         return self.parameters is None
 
