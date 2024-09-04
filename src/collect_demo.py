@@ -21,7 +21,7 @@ if __name__ == "__main__":
     if args.env == "npuzzle":
         env = NPuzzle(random=True, max_steps=args.max_steps, object_centric=True)
     elif args.env == "sokoban":
-        env = Sokoban(size=(4, 4), object_centric=True, max_crates=1, max_steps=args.max_steps)
+        env = Sokoban(size=(6, 6), object_centric=True, min_crates=1, max_crates=1, max_steps=args.max_steps)
     elif args.env == "minecraft":
         assert args.yaml is not None, "Please provide the yaml file for the Minecraft environment"
         world_config = yaml.safe_load(open(args.yaml, "r"))
