@@ -511,7 +511,7 @@ class Proposition:
     """
 
     def __init__(self, idx: int, name: str, estimator: Optional[DensityEstimator],
-                 parameters: Optional[list[(str, str)]] = None):
+                 parameters: Optional[list[tuple[str, str]]] = None):
         """
         Create a new predicate.
 
