@@ -27,6 +27,15 @@ USEFUL_ITEMS = {
     "iron_ingot",
 }
 
+PRIVILEGED_MAPPING = {
+    "null": 0,
+    "air": 1,
+    "wood": 2,
+    "cobblestone": 3,
+    "wooden planks": 4,
+    "crafting table": 5
+}
+
 
 class Minecraft(gym.Env):
     def __init__(self, world_config: dict, world_seed: int = 0, seed: int = 0, max_steps=200):
@@ -68,12 +77,13 @@ class Minecraft(gym.Env):
         self._agent_img = None
         self._last_targeted_block = None
         self._prev_obs = {}
+        self._executed_actions = {}
 
     @property
     def observation(self) -> dict:
         obs = {}
         if self._agent_img is not None:
-            img = self._agent_img.copy().reshape(-1)
+            img = self._agent_img[0].copy().reshape(-1)
             obs["agent"] = {0: img}
         else:
             obs["agent"] = {0: None}
@@ -107,7 +117,8 @@ class Minecraft(gym.Env):
                     top_exists = 2
                 neighbors = np.array([east_exists, south_exists, west_exists, north_exists, top_exists], dtype=np.uint8)
                 obs["objects"][key] = np.concatenate([img, neighbors])
-        obs["dimensions"] = {"inventory": 32*32*3, "agent": 32*32*3, "objects": 32*32*3+5}
+        obs["global"] = {0: np.array(self.agent_pos + (self.agent_dir,))}
+        obs["dimensions"] = {"inventory": 32*32*3, "agent": 32*32*3, "objects": 32*32*3+5, "global": 4}
         return obs
 
     @property
@@ -121,7 +132,47 @@ class Minecraft(gym.Env):
 
     @property
     def info(self) -> dict:
-        return self.prev_obs
+        obs = {}
+        if self._agent_img is not None:
+            block_name = self._agent_img[1]
+            obs["agent"] = {0: np.array([PRIVILEGED_MAPPING[block_name], 0, 0, 0, 0, 0])}
+        else:
+            obs["agent"] = {0: np.array([0, 0, 0, 0, 0, 0])}
+
+        obs["inventory"] = {}
+        inv = self.prev_obs["inventory"]
+        for i in range(9):
+            obs["inventory"][i] = np.array([
+                ALL_ITEMS.index(inv["name"][i].replace(" ", "_")),
+                int(inv["quantity"][i]),
+                0, 0, 0, 0
+            ])
+
+        obs["objects"] = {}
+        for key in self._block_map:
+            if self._block_map[key][0]:
+                x, y, z = key
+                block = PRIVILEGED_MAPPING[self._block_map[key][2]]
+                east_exists = self._block_exists(x+1, y, z)
+                south_exists = self._block_exists(x, y, z+1)
+                west_exists = self._block_exists(x-1, y, z)
+                north_exists = self._block_exists(x, y, z-1)
+                top_exists = self._block_exists(x, y+1, z)
+                if (x+1, y, z) == self.agent_pos:
+                    east_exists = 2
+                elif (x, y, z+1) == self.agent_pos:
+                    south_exists = 2
+                elif (x-1, y, z) == self.agent_pos:
+                    west_exists = 2
+                elif (x, y, z-1) == self.agent_pos:
+                    north_exists = 2
+                elif (x, y+1, z) == self.agent_pos:
+                    top_exists = 2
+                neighbors = np.array([east_exists, south_exists, west_exists, north_exists, top_exists])
+                obs["objects"][key] = np.concatenate([[block], neighbors])
+        obs["global"] = {0: np.array(self.agent_pos + (self.agent_dir,))}
+        obs["dimensions"] = {"agent": 6, "inventory": 6, "objects": 6, "global": 4}
+        return obs
 
     @property
     def world_limit(self) -> dict:
@@ -141,6 +192,19 @@ class Minecraft(gym.Env):
         return int(np.floor(pos[0])), int(np.floor(pos[1])), int(np.floor(pos[2]))
 
     @property
+    def agent_dir(self) -> int:
+        # 0: east, 1: south, 2: west, 3: north
+        yaw = self.prev_obs["location_stats"]["yaw"]
+        if -135 < yaw <= -45:
+            return 0
+        elif -45 < yaw <= 45:
+            return 1
+        elif 45 < yaw <= 135:
+            return 2
+        else:
+            return 3
+
+    @property
     def last_targeted_block(self) -> Optional[tuple[int, int, int]]:
         return self._last_targeted_block
 
@@ -151,6 +215,10 @@ class Minecraft(gym.Env):
         z = int(np.floor(self.prev_obs["rays"]["traced_block_z"]))
         return x, y, z
 
+    @property
+    def item_in_hand(self) -> str:
+        return self.prev_obs["inventory"]["name"][0]
+
     def reset(self) -> dict:
         obs = self._env.reset()
         self._prev_obs = obs
@@ -159,7 +227,12 @@ class Minecraft(gym.Env):
         return self.observation
 
     def step(self, action) -> tuple[dict, float, bool, dict]:
-        action_type, (action_args, object_args) = action
+        action_type, action_args, object_args = action
+        action_key = (self.item_in_hand, action_type, action_args)
+        if action_key not in self._executed_actions:
+            self._executed_actions[action_key] = 0
+        self._executed_actions[action_key] += 1
+
         if action_type == "teleport":
             x, y, z = object_args[0]
             side = action_args[0]
@@ -188,48 +261,53 @@ class Minecraft(gym.Env):
 
     def sample_action(self):
         actions = self.available_actions()
-        action_types = list(actions.keys())
-        available_action_types = [a for a in action_types if len(actions[a]) > 0]
-        a = np.random.choice(available_action_types)
-        args = actions[a][np.random.randint(0, len(actions[a]))]
-        return (a, args)
+        weights = []
+        for a in actions:
+            a_item = (self.item_in_hand, a[0], a[1])
+            if a_item in self._executed_actions:
+                n = self._executed_actions[a_item]
+            else:
+                n = 1
+            weights.append(n)
+        weights = np.array(weights)
+        weights = np.sqrt(2*np.log(np.sum(weights))/weights)
+        idx = np.random.choice(len(actions), p=weights/np.sum(weights))
+        idx = np.argmax(weights)
+        return actions[idx]
 
     def available_actions(self):
-        actions = {"teleport": [],
-                   "attack": [],
-                   "place": [],
-                   "equip": [],
-                   "craft": []}
+        actions = []
+
         # possible teleport locations
         # teleport(block, side)
         for (x, y, z) in self._block_map:
             if not self._block_map[(x, y, z)][0]:
                 continue
             if (not self._block_map[(x+1, y, z)][0]) and self._below_support_exists(x+1, y, z):
-                actions["teleport"].append((("east",), ((x, y, z),)))
+                actions.append(("teleport", ("east",), ((x, y, z),)))
             if (not self._block_map[(x, y, z+1)][0]) and self._below_support_exists(x, y, z+1):
-                actions["teleport"].append((("south",), ((x, y, z),)))
+                actions.append(("teleport", ("south",), ((x, y, z),)))
             if (not self._block_map[(x-1, y, z)][0]) and self._below_support_exists(x-1, y, z):
-                actions["teleport"].append((("west",), ((x, y, z),)))
+                actions.append(("teleport", ("west",), ((x, y, z),)))
             if (not self._block_map[(x, y, z-1)][0]) and self._below_support_exists(x, y, z-1):
-                actions["teleport"].append((("north",), ((x, y, z),)))
+                actions.append(("teleport", ("north",), ((x, y, z),)))
             if (not self._block_map[(x, y+1, z)][0]) and self._below_support_exists(x, y+1, z):
-                actions["teleport"].append((("top",), ((x, y, z),)))
+                actions.append(("teleport", ("top",), ((x, y, z),)))
 
         if self.last_targeted_block is not None:
             # attack()
-            actions["attack"].append(((), ()))
+            actions.append(("attack", (), ()))
         for item_type in self._placeable_items():
             # place(item_type)
-            actions["place"].append(((item_type,), ()))
+            actions.append(("place", (item_type,), ()))
         for item_type in self._equippable_items():
             # equip(item_type)
-            actions["equip"].append(((item_type,), ()))
+            actions.append(("equip", (item_type,), ()))
         for item_type in self._craftable_items():
             if item_type not in USEFUL_ITEMS:
                 continue
             # craft(craftable_item)
-            actions["craft"].append(((item_type,), ()))
+            actions.append(("craft", (item_type,), ()))
         return actions
 
     def close(self):
@@ -280,18 +358,19 @@ class Minecraft(gym.Env):
         place_idx = Minecraft.PLACE(inventory_slot)
         self._step(place_idx)
         self._look_and_update_belief(ax, ay, az)
+
         if (self._world_limit["xmin"] < ax) and ((ax-1, ay, az) not in self._block_map):
-            self._block_map[(ax-1, ay, az)] = (False, "air")
+            self._block_map[(ax-1, ay, az)] = (False, "air", "air")
         if (self._world_limit["xmax"] > ax) and ((ax+1, ay, az) not in self._block_map):
-            self._block_map[(ax+1, ay, az)] = (False, "air")
+            self._block_map[(ax+1, ay, az)] = (False, "air", "air")
         if (self._world_limit["ymin"] < ay) and ((ax, ay-1, az) not in self._block_map):
-            self._block_map[(ax, ay-1, az)] = (False, "air")
+            self._block_map[(ax, ay-1, az)] = (False, "air", "air")
         if (self._world_limit["ymax"] > ay) and ((ax, ay+1, az) not in self._block_map):
-            self._block_map[(ax, ay+1, az)] = (False, "air")
+            self._block_map[(ax, ay+1, az)] = (False, "air", "air")
         if (self._world_limit["zmin"] < az) and ((ax, ay, az-1) not in self._block_map):
-            self._block_map[(ax, ay, az-1)] = (False, "air")
+            self._block_map[(ax, ay, az-1)] = (False, "air", "air")
         if (self._world_limit["zmax"] > az) and ((ax, ay, az+1) not in self._block_map):
-            self._block_map[(ax, ay, az+1)] = (False, "air")
+            self._block_map[(ax, ay, az+1)] = (False, "air", "air")
         return True
 
     def _equip_item(self, item_name: str) -> bool:
@@ -350,27 +429,34 @@ class Minecraft(gym.Env):
             self._teleport(x_i+1, y_i, z_i)
             self._look_and_update_belief(x_i, y_i, z_i)
             if self._world_limit["xmin"] < x_i:
-                self._block_map[(x_i-1, y_i, z_i)] = (False, "air")
+                self._block_map[(x_i-1, y_i, z_i)] = (False, "air", "air")
             if self._world_limit["xmax"] > x_i:
-                self._block_map[(x_i+1, y_i, z_i)] = (False, "air")
+                self._block_map[(x_i+1, y_i, z_i)] = (False, "air", "air")
             if self._world_limit["ymin"] < y_i:
-                self._block_map[(x_i, y_i-1, z_i)] = (False, "air")
+                self._block_map[(x_i, y_i-1, z_i)] = (False, "air", "air")
             if self._world_limit["ymax"] > y_i:
-                self._block_map[(x_i, y_i+1, z_i)] = (False, "air")
+                self._block_map[(x_i, y_i+1, z_i)] = (False, "air", "air")
             if self._world_limit["zmin"] < z_i:
-                self._block_map[(x_i, y_i, z_i-1)] = (False, "air")
+                self._block_map[(x_i, y_i, z_i-1)] = (False, "air", "air")
             if self._world_limit["zmax"] > z_i:
-                self._block_map[(x_i, y_i, z_i+1)] = (False, "air")
+                self._block_map[(x_i, y_i, z_i+1)] = (False, "air", "air")
 
     def _look_and_update_belief(self, x: int, y: int, z: int) -> None:
         self._look_at_block(x, y, z, noisy=True)
+        rays = self.prev_obs["rays"]
+        if self.traced_block == (x, y, z):
+            block_name = rays["block_name"][0]
+        elif self._block_exists(x, y, z):
+            block_name = self._block_map[(x, y, z)][2]
+        else:
+            block_name = "null"
         img = self._get_block_from_current_view(x, y, z)
         self._last_targeted_block = (x, y, z)
-        self._block_map[(x, y, z)] = (True, img.copy())
-        self._agent_img = img.copy()
+        self._block_map[(x, y, z)] = (True, img.copy(), block_name)
+        self._agent_img = (img.copy(), block_name)
 
     def _clear_belief(self, x: int, y: int, z: int) -> None:
-        self._block_map[(x, y, z)] = (False, "air")
+        self._block_map[(x, y, z)] = (False, "air", "air")
         self._agent_img = None
         self._last_targeted_block = None
 
@@ -474,6 +560,8 @@ class Minecraft(gym.Env):
         if noisy:
             yaw += np.random.normal(0, 1.5)
             pitch += np.random.normal(0, 1.5)
+        yaw = np.clip(yaw, -180, 180)
+        pitch = np.clip(pitch, -89, 89)
         self._env.teleport_agent(agent_x, agent_y, agent_z, yaw, pitch)
         self._wait(2)
 
@@ -596,8 +684,9 @@ class MinecraftDataset(UnorderedDataset):
 
     def __getitem__(self, idx):
         x, x_, key_order = dict_to_transition(self._state[idx], self._next_state[idx])
-        x = self._normalize_imgs(x)
-        x_ = self._normalize_imgs(x_)
+        if not self._privileged:
+            x = self._normalize_imgs(x)
+            x_ = self._normalize_imgs(x_)
         if self._transform_action:
             a = self._actions_to_label(self._action[idx], key_order)
         else:
@@ -612,8 +701,7 @@ class MinecraftDataset(UnorderedDataset):
 
     @staticmethod
     def _actions_to_label(action, key_order):
-        action_type, args = action
-        action_args, _ = args
+        action_type, action_args, object_args = action
         a_ = torch.zeros(402, dtype=torch.float32)
         a_[MinecraftDataset.ACTION_TO_IDX[action_type]] = 1
         if action_type == "teleport":
@@ -621,12 +709,11 @@ class MinecraftDataset(UnorderedDataset):
         elif action_type != "attack":
             a_[MinecraftDataset.ITEMS_TO_IDX[action_args[0]]] = 1
 
-        target = action[1][1]
-        if len(target) != 0:
-            target = target[0]
-            target = key_order.index(target) + 1
+        if len(object_args) != 0:
+            target_obj = object_args[0]
+            target_obj = key_order.index(target_obj) + 1
         else:
-            target = 0
+            target_obj = 0
         a = torch.zeros(len(key_order)+1, 402, dtype=torch.float32)
-        a[target] = a_
+        a[target_obj] = a_
         return a
