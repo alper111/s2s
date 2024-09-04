@@ -88,13 +88,16 @@ def collect_raw(n: int, env: gym.Env,
     """
 
     state = []
+    priv_state = []
     action = []
     reward = []
     next_state = []
+    priv_next_state = []
 
     i = 0
     while i < n:
         obs = env.reset()
+        info = env.info
         done = False
 
         while (not done) and (i < n):
@@ -106,15 +109,18 @@ def collect_raw(n: int, env: gym.Env,
                 # execute it in a loop till it terminates
                 raise NotImplementedError
             old_obs = deepcopy(obs)
+            old_info = deepcopy(info)
 
             obs, rew, done, info = env.step(a)
-            if not info["action_success"]:
+            if not info.pop("action_success"):
                 continue
 
             state.append(old_obs)
+            priv_state.append(old_info)
             action.append(a)
             reward.append(rew)
             next_state.append(deepcopy(obs))
+            priv_next_state.append(deepcopy(info))
             i += 1
 
     env.close()
@@ -123,6 +129,8 @@ def collect_raw(n: int, env: gym.Env,
     if extension != "":
         extension = f"_{extension}"
     np.save(os.path.join(save_folder, f"state{extension}.npy"), np.stack(state))
+    np.save(os.path.join(save_folder, f"priv_state{extension}.npy"), np.stack(priv_state))
     pickle.dump(action, open(os.path.join(save_folder, f"action{extension}.pkl"), "wb"))
     np.save(os.path.join(save_folder, f"reward{extension}.npy"), np.array(reward))
     np.save(os.path.join(save_folder, f"next_state{extension}.npy"), np.stack(next_state))
+    np.save(os.path.join(save_folder, f"priv_next_state{extension}.npy"), np.stack(priv_next_state))
