@@ -17,12 +17,13 @@ class Sokoban(gym.Env):
     metadata = {"render_modes": ["human", "array"], "render_fps": 5}
 
     def __init__(self, map_file: str = None, size: tuple[int, int] = None, object_centric: bool = False,
-                 max_crates: int = 5, max_steps=200, render_mode: str = None, rand_digits: bool = False,
-                 rand_agent: bool = False, rand_x: bool = False):
+                 min_crates: int = 5, max_crates: int = 5, max_steps=200, render_mode: str = None,
+                 rand_digits: bool = False, rand_agent: bool = False, rand_x: bool = False):
         assert map_file is not None or size is not None, "Either map_file or size must be provided"
 
         self._map_file = map_file
         self._size = size
+        self._min_crates = min_crates
         self._max_crates = max_crates
         self._max_steps = max_steps
         self._object_centric = object_centric
@@ -91,7 +92,7 @@ class Sokoban(gym.Env):
         if self._map_file is not None:
             self._map = self.read_map(self._map_file)
         else:
-            self._map = self.generate_map(self._size, max_crates=self._max_crates)
+            self._map = self.generate_map(self._size, min_crates=self._min_crates, max_crates=self._max_crates)
         self._shape = (len(self._map), len(self._map[0]))
 
         if self.object_centric:
@@ -365,12 +366,16 @@ class Sokoban(gym.Env):
         return _map
 
     @staticmethod
-    def generate_map(size: tuple[int, int] = (10, 10), max_crates: int = 5) -> list[list[str]]:
+    def generate_map(size: tuple[int, int] = (10, 10),
+                     min_crates: int = 5,
+                     max_crates: int = 5) -> list[list[str]]:
         ni, nj = size
-        assert ni >= 3 and nj >= 3, "The size of the map must be at least 3x3"
-        total_middle_tiles = (ni-2)*(nj-2)
+        assert ni >= 5 and nj >= 5, "The size of the map must be at least 5x5"
+        total_middle_tiles = (ni-4)*(nj-4)
         assert (2*max_crates+1) <= total_middle_tiles, \
             "The number of crates (together with their goals) must be less than the total non-edge empty tiles"
+        assert max_crates > 0, "The number of crates must be at least 1"
+        assert max_crates < 10, "The number of crates must be less than 10"
 
         _map = [[(" ", " ") for _ in range(nj)] for _ in range(ni)]
 
