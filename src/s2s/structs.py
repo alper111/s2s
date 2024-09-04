@@ -638,6 +638,10 @@ class Proposition:
     def empty():
         return Proposition(-1, "empty", None)
 
+    @staticmethod
+    def not_equal(p1: str, p2: str):
+        return Proposition(-3, "=", None, [(p1, None), (p2, None)]).negate()
+
 
 class UniquePredicateList:
     """
