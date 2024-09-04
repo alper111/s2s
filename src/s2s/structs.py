@@ -802,6 +802,18 @@ class UniquePredicateList:
             else:
                 return self.project(symbol, factors[1:])
 
+    def get_active_symbols(self, observation: np.ndarray, max_samples: int = 100) -> np.ndarray:
+        x = self.get_active_symbol_indices(observation, max_samples)
+        symbols = np.zeros_like(x)
+        for i, f_i in enumerate(self.factors):
+            group = np.array(self.mutex_groups[f_i])
+            symbols[..., i] = group[x[..., i]]
+        shape = symbols.shape
+        symbols = symbols.reshape(-1)
+        symbols = np.array([self._list[i] for i in symbols])
+        symbols = symbols.reshape(shape)
+        return symbols
+
     def get_active_symbol_indices(self, observation: np.ndarray,
                                   max_samples: int = 100) -> np.ndarray:
         """
