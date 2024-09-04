@@ -1487,9 +1487,7 @@ class PDDLProblem:
         return self.__str__()
 
 
-def sort_dataset(dataset: S2SDataset, mask_full_obj: bool = False,
-                 mask_pos_feats: bool = False, flatten: bool = False,
-                 shuffle_only_nonmask: bool = False) -> S2SDataset:
+def sort_dataset(dataset: S2SDataset, flatten: bool = False) -> S2SDataset:
     """
     Given a dataset with object-factored states, convert it to a canonical form
     where objects that are affected by the action are followed by the non-affected
@@ -1501,15 +1499,9 @@ def sort_dataset(dataset: S2SDataset, mask_full_obj: bool = False,
     ----------
     dataset : S2SDataset
         The dataset to be converted.
-    mask_full_obj : bool, optional
-        Whether to mask the full object or just the effected part of the object.
-    mask_pos_feats : bool, optional
-        Whether to mask features that are related to positions all together.
     flatten : bool, optional
         Whether to flatten the state into a fixed-size vector instead of a collection
         of objects.
-    shuffle_only_nonmask : bool, optional
-        Whether to shuffle only the non-masked objects.
 
     Returns
     -------
@@ -1534,8 +1526,7 @@ def sort_dataset(dataset: S2SDataset, mask_full_obj: bool = False,
         # add other objects that are affected by the action
         obj_mask = np.any(dataset.mask[i], axis=1)
         effected_objs, = np.where(obj_mask)
-        if not shuffle_only_nonmask:
-            np.random.shuffle(effected_objs)
+        np.random.shuffle(effected_objs)
         order.extend(effected_objs)
 
         # add other objects that are not affected by the action
@@ -1546,13 +1537,7 @@ def sort_dataset(dataset: S2SDataset, mask_full_obj: bool = False,
         for j, o_i in enumerate(order):
             state[i, j] = dataset.state[i, o_i]
             next_state[i, j] = dataset.next_state[i, o_i]
-            if mask_full_obj:
-                mask[i, j] = np.any(dataset.mask[i, o_i], axis=-1)
-            elif mask_pos_feats:
-                mask[i, j] = dataset.mask[i, o_i]
-                mask[i, j, -2:] = np.any(dataset.mask[i, o_i, -2:])
-            else:
-                mask[i, j] = dataset.mask[i, o_i]
+            mask[i, j] = dataset.mask[i, o_i]
 
     if flatten:
         state = state.reshape(n_sample, -1)
