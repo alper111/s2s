@@ -1271,7 +1271,10 @@ class PDDLDomain:
     A PDDL domain. A domain is a set of predicates, actions, and operators that define the state space
     and the actions that can be taken in that state space.
     """
-    def __init__(self, name: str, vocabulary: UniquePredicateList, operators: list[ActionSchema], lifted: bool = False):
+    def __init__(self, name: str,
+                 vocabulary: list[UniquePredicateList],
+                 operators: list[ActionSchema],
+                 types: Optional[list[str]] = None):
         """
         Create a new PDDL domain.
 
@@ -1279,12 +1282,12 @@ class PDDLDomain:
         ----------
         name : str
             The name of the domain.
-        vocabulary : UniquePredicateList
-            The vocabulary of the domain.
+        vocabulary : list[UniquePredicateList]
+            List of vocabularies for different types of symbols.
         operators : list[ActionSchema]
             The action schemas of the domain.
-        lifted : bool, optional
-            Whether the domain is lifted or not. Default is False.
+        types : list[str], optional
+            The types of the objects in the domain.
 
         Returns
         -------
@@ -1294,81 +1297,85 @@ class PDDLDomain:
         self.vocabulary = vocabulary
         self.num_operators = len(operators)
         self.operator_str = "\n\n".join([str(x) for x in operators])
-        self.lifted = lifted
+        self.types = types
 
         self._comment = f";Automatically generated {self.name} domain PDDL file."
         self._definition = f"define (domain {self.name})"
-        self._requirements = "\t(:requirements :strips)"
+        self._requirements = "\t(:requirements :strips :typing)"
 
-    def active_symbols(self, observation: np.ndarray) -> list[Proposition]:
+    def active_symbols(self, *observations: np.ndarray) -> list[Proposition]:
         """
         Get the active symbols in the observation.
 
         Parameters
         ----------
-        observation : np.ndarray
-            The observation to evaluate.
+        observations : np.ndarray
+            Observations for each type of vocabulary.
+            i.e., `observations[i]` corresponds to `vocabulary[i]`.
 
         Returns
         -------
         active_symbols : list[Proposition]
             The active symbols in the observation.
         """
-        assert self.vocabulary.mutex_groups is not None, "Mutually exclusive factors are not defined."
+        for v in self.vocabulary:
+            assert v.mutex_groups is not None, "Mutually exclusive factors are not defined."
 
         active_symbols = {}
-        if observation.ndim == 1:
-            # global observation
-            active_symbols["global"] = self._get_active_symbols(observation)
-        else:
-            # object-factored observation
-            for o_i in range(observation.shape[0]):
-                name = f"obj{o_i}"
-                active_symbols[name] = self._get_active_symbols(observation[o_i])
-        return active_symbols
-
-    def _get_active_symbols(self, observation: np.ndarray) -> list[Proposition]:
-        active_symbols = []
-        for factor in self.vocabulary.mutex_groups:
-            group = self.vocabulary.mutex_groups[factor]
-            if len(group) == 0:
-                continue
-
-            scores = np.zeros(len(group))
-            masked_obs = observation[factor.variables].reshape(1, -1)
-            for p_i, idx in enumerate(group):
-                prop = self.vocabulary[idx]
-                scores[p_i] = prop.estimator.score_samples(masked_obs)[0]
-            active_symbols.append(self.vocabulary[group[np.argmax(scores)]])
+        for obs, vocab in zip(observations, self.vocabulary):
+            symbols = vocab.get_active_symbols(obs[np.newaxis, ...])[0]
+            if symbols.ndim == 1:
+                # global observation
+                active_symbols["global"] = symbols.tolist()
+            else:
+                # object-factored observation
+                for o_i in range(symbols.shape[0]):
+                    name = f"obj{o_i}"
+                    active_symbols[name] = symbols[o_i].tolist()
         return active_symbols
 
     def __str__(self):
         symbols = "\t\t "
-        for i, p in enumerate(self.vocabulary):
-            # TODO: need to understand lifted propositions
-            # fixed to lifted propositions for now
-            if self.lifted:
-                symbols += f"({p} ?x)"
-            else:
+        types = []
+        for v_i, vocab in enumerate(self.vocabulary):
+            for i, p in enumerate(vocab):
                 symbols += f"({p})"
 
-            if (i+1) % 6 == 0:
-                symbols += "\n\t\t"
-            else:
-                symbols += " "
+                if (i+1) % 6 == 0:
+                    symbols += "\n\t\t"
+                else:
+                    symbols += " "
+
+        if self.types is None:
+            # this part works only if predicates are typed as well
+            for v_i, vocab in enumerate(self.vocabulary):
+                for w in vocab:
+                    if w.parameters is not None and w.parameters[0][1] is not None:
+                        type_name = f"v{v_i}_{w.parameters[0][1]}"
+                        if type_name not in types:
+                            types.append(type_name)
+        else:
+            types = self.types
+
+        if len(types) > 0:
+            types = [f"{t} - object" for t in types]
+            types = "\n\t\t".join(types)
+            types = f"\t(:types {types})\n"
+        else:
+            types = ""
 
         predicates = f"\t(:predicates\n{symbols}\n\t)"
-
         description = f"{self._comment}\n" + \
                       f"({self._definition}\n" + \
                       f"{self._requirements}\n" + \
+                      f"{types}" + \
                       f"{predicates}\n\n" + \
                       f"{self.operator_str}\n)"
         return description
 
     def __repr__(self) -> str:
         return f"{self._comment}\n({self._definition}\n{self._requirements}\n" + \
-               f"\t...{len(self.vocabulary)} symbols...\n\t...{self.num_operators} actions...\n)"
+               f"\t...{sum([len(v) for v in self.vocabulary])} symbols...\n\t...{self.num_operators} actions...\n)"
 
 
 class PDDLProblem:
