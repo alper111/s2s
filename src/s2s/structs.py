@@ -1027,10 +1027,12 @@ class LiftedDecisionTree:
                 sym = self.vocabulary.get_by_index(f_i, s_i)
 
                 if o_id == -1:
-                    sym = sym.substitute([(f"a{a_it}", None)])
+                    if sym.parameters is not None:
+                        sym = sym.substitute([(f"a{a_it}", None)])
                     a_it += 1
                 else:
-                    sym = sym.substitute([(f"x{o_id}", None)])
+                    if sym.parameters is not None:
+                        sym = sym.substitute([(f"x{o_id}", None)])
                 pre.append(sym)
             preconditions.append(pre)
         return preconditions
