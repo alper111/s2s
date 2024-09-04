@@ -1204,25 +1204,41 @@ class ActionSchema:
         return self.__str__()
 
     def __str__(self):
-        precondition = ""
-        effect = ""
-        if len(self.preconditions) > 0:
-            precondition += _proposition_to_str(self.preconditions)
-        if len(self.effects) > 0:
-            effect += _proposition_to_str(self.effects)
         params = []
-        for prop in self.preconditions + self.effects:
+        types = []
+        for prop in self.preconditions:
             if prop.parameters is not None:
-                for param in prop.parameters:
+                for (param, t) in prop.parameters:
                     if param not in params:
                         params.append(param)
+                        types.append(t)
+        for prop in self.effects:
+            if prop.parameters is not None:
+                for (param, t) in prop.parameters:
+                    if param not in params:
+                        params.append(param)
+                        types.append(None)
+
+        # ensure that parameters are distinct
+        distinct_preds = []
+        if len(params) > 1:
+            for i in range(len(params)):
+                for j in range(i+1, len(params)):
+                    distinct_preds.append(Proposition.not_equal(params[i], params[j]))
+
+        precondition = ""
+        effect = ""
+        if len(self.preconditions + distinct_preds) > 0:
+            precondition += _proposition_to_str(distinct_preds + self.preconditions)
+        if len(self.effects) > 0:
+            effect += _proposition_to_str(self.effects)
 
         parameters = []
-        for param in params:
-            if param[1] is not None:
-                parameters.append(f"?{param[0]} - {param[1]}")
+        for (param, t) in zip(params, types):
+            if t is not None:
+                parameters.append(f"?{param} - {t}")
             else:
-                parameters.append(f"?{param[0]}")
+                parameters.append(f"?{param}")
         parameters = " ".join(parameters)
 
         schema = f"(:action {self.name}\n" + \
@@ -1234,9 +1250,20 @@ class ActionSchema:
 
 def _proposition_to_str(proposition: Union[Proposition, list[Proposition]]) -> str:
     if isinstance(proposition, Proposition):
-        return f"({proposition})"
+        if proposition.parameters is None:
+            return f"({proposition})"
+        else:
+            typeless_params = [(p[0], None) for p in proposition.parameters]
+            return f"({proposition.substitute(typeless_params)})"
     elif isinstance(proposition, list):
-        return " ".join([f"({p})" for p in proposition])
+        typeless_props = []
+        for p in proposition:
+            if p.parameters is not None:
+                typeless_params = [(p[0], None) for p in p.parameters]
+                typeless_props.append(f"({p.substitute(typeless_params)})")
+            else:
+                typeless_props.append(f"({p})")
+        return " ".join(typeless_props)
 
 
 class PDDLDomain:
