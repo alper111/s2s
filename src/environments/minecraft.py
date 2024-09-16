@@ -683,7 +683,8 @@ class MinecraftDataset(UnorderedDataset):
     ITEMS_TO_IDX = {x: i for i, x in enumerate(ALL_ITEMS, 10)}
 
     def __getitem__(self, idx):
-        x, x_, key_order = dict_to_transition(self._state[idx], self._next_state[idx])
+        x, x_, key_order = dict_to_transition(self._state[idx], self._next_state[idx],
+                                              exclude_keys=self.exclude_keys)
         if not self._privileged:
             x = self._normalize_imgs(x)
             x_ = self._normalize_imgs(x_)
