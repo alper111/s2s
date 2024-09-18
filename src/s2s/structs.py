@@ -129,9 +129,11 @@ class S2SDataset:
 
 
 class UnorderedDataset(torch.utils.data.Dataset):
-    def __init__(self, root_folder: str, transform_action: bool = True, privileged: bool = False):
+    def __init__(self, root_folder: str, transform_action: bool = True,
+                 privileged: bool = False, exclude_keys: list[str] = []):
         self._root_folder = root_folder
         self._privileged = privileged
+        self.exclude_keys = exclude_keys
         if privileged:
             self._state = np.load(os.path.join(root_folder, "priv_state.npy"), allow_pickle=True)
             self._next_state = np.load(os.path.join(root_folder, "priv_next_state.npy"), allow_pickle=True)
@@ -145,7 +147,8 @@ class UnorderedDataset(torch.utils.data.Dataset):
         return len(self._state)
 
     def __getitem__(self, idx):
-        x, x_, key_order = dict_to_transition(self._state[idx], self._next_state[idx])
+        x, x_, key_order = dict_to_transition(self._state[idx], self._next_state[idx],
+                                              exclude_keys=self.exclude_keys)
         if self._transform_action:
             a = self._actions_to_label(self._action[idx], key_order)
         else:

@@ -12,11 +12,11 @@ from environments.sokoban import SokobanDataset
 def main(args):
     data_path = os.path.join("data", args.env)
     if args.env == "npuzzle":
-        dataset = NPuzzleDataset(data_path)
+        dataset = NPuzzleDataset(data_path, exclude_keys=["global"])
     elif args.env == "sokoban":
-        dataset = SokobanDataset(data_path)
+        dataset = SokobanDataset(data_path, exclude_keys=["global"])
     elif args.env == "minecraft":
-        dataset = MinecraftDataset(data_path)
+        dataset = MinecraftDataset(data_path, exclude_keys=["global"])
     else:
         raise ValueError
 
