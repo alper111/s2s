@@ -1361,7 +1361,7 @@ class PDDLDomain:
             types = self.types
 
         if len(types) > 0:
-            types = [f"{t} - object" for t in types]
+            types = [f"{o_t} - {f_t}" for (o_t, f_t) in types]
             types = "\n\t\t".join(types)
             types = f"\t(:types {types})\n"
         else:
@@ -1405,8 +1405,10 @@ class PDDLProblem:
         self.domain = domain_name
         self.init_propositions = []
         self.goal_propositions = []
+        self.object_types = {}
 
-    def initialize_from_dict(self, init_dict: dict, goal_dict: dict) -> None:
+    def initialize_from_dict(self, init_dict: dict, goal_dict: dict,
+                             object_types: Optional[dict] = {}) -> None:
         """
         Initialize the problem from a dictionary.
 
@@ -1416,6 +1418,8 @@ class PDDLProblem:
             The dictionary containing the initial state of the problem.
         goal_dict : dict
             The dictionary containing the goal state of the problem.
+        object_types : dict, optional
+            The types of the objects in the problem.
 
         Returns
         -------
@@ -1427,6 +1431,7 @@ class PDDLProblem:
                 self.add_init_proposition(prop, name)
             for prop in goal_dict[obj]:
                 self.add_goal_proposition(prop, name)
+        self.object_types = object_types
 
     def add_init_proposition(self, proposition: Proposition, name: str = None):
         self.init_propositions.append((proposition, name))
@@ -1440,14 +1445,14 @@ class PDDLProblem:
         for prop, name in self.init_propositions:
             if name is not None and name not in name_covered:
                 name_str = f"{name}"
-                if prop.parameters is not None and prop.parameters[0][1] is not None:
-                    name_str += f" - {prop.parameters[0][1]}"
+                if len(self.object_types) > 0 and name in self.object_types:
+                    name_str += f" - {self.object_types[name]}"
                 obj_names.append(name_str)
                 name_covered[name] = True
         for prop, name in self.goal_propositions:
             if name is not None and name not in name_covered:
                 name_str = f"{name}"
-                if prop.parameters is not None and prop.parameters[0][1] is not None:
+                if len(self.object_types) > 0 and name in self.object_types:
                     name_str += f" - {prop.parameters[0][1]}"
                 obj_names.append(name_str)
                 name_covered[name] = True
@@ -1455,28 +1460,34 @@ class PDDLProblem:
 
     def __str__(self):
         init = ""
+        last_name = ""
         for i, (prop, name) in enumerate(self.init_propositions):
+            if last_name != name:
+                init += "\n\t\t"
+                last_name = name
+
             if prop.parameters is not None:
                 prop = prop.substitute(None)
             if name is not None:
                 init += f"({prop} {name})"
             else:
                 init += f"({prop})"
-            if (i+1) % 6 == 0:
-                init += "\n\t\t"
-            elif i < len(self.init_propositions) - 1:
+            if i < len(self.init_propositions) - 1:
                 init += " "
         goal = ""
+        last_name = ""
         for i, (prop, name) in enumerate(self.goal_propositions):
+            if last_name != name:
+                goal += "\n\t\t"
+                last_name = name
+
             if prop.parameters is not None:
                 prop = prop.substitute(None)
             if name is not None:
                 goal += f"({prop} {name})"
             else:
                 goal += f"({prop})"
-            if (i+1) % 6 == 0:
-                goal += "\n\t\t"
-            elif i < len(self.goal_propositions) - 1:
+            if i < len(self.goal_propositions) - 1:
                 goal += " "
         object_names = '\n\t\t'.join(self.get_object_names())
         description = f"(define (problem {self.name})\n" + \
