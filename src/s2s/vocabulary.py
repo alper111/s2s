@@ -116,6 +116,122 @@ def build_schemata(vocabulary: UniquePredicateList,
     return schemata
 
 
+def build_typed_schemata(vocabulary: UniquePredicateList, schemata: list[ActionSchema]) -> list[ActionSchema]:
+    """
+    Build typed action schemata from the given action schemata.
+
+    Parameters
+    ----------
+        vocabulary : UniquePredicateList
+            The vocabulary of propositions.
+        schemata : list[ActionSchema]
+            The action schemata.
+
+    Returns
+    -------
+        typed_schemata : list[ActionSchema]
+            The typed action schemata.
+    """
+    # Find all possible symbolic transitions starting from a symbol.
+    # Symbols that have the same possible set of transitions are
+    # defined as the same type.
+    symbol_affordances = {}
+    for w in vocabulary:
+        symbol_affordances[w] = set(_find_factored_symbol_affordance(w, schemata, len(vocabulary)))
+
+    types = {}
+    groups = {}
+    sym_to_type = {}
+    it = 0
+    factor_types = defaultdict(list)
+    for s in symbol_affordances:
+        for t in types:
+            if (symbol_affordances[s], tuple(s.factors)) == types[t]:
+                groups[t].append(s)
+                sym_to_type[s] = t
+                break
+        else:
+            name = f"type{it}"
+            types[name] = (symbol_affordances[s], tuple(s.factors))
+            groups[name] = [s]
+            sym_to_type[s] = name
+            factor_types[tuple(s.factors)].append(name)
+            it += 1
+
+    all_types = []
+    otype_idx = 0
+    object_types = {}
+    for comb in product(*tuple(factor_types.values())):
+        otype = f"otype{otype_idx}"
+        for t in comb:
+            all_types.append((otype, t))
+        otype_idx += 1
+        object_types[otype] = set(comb)
+    for t in types:
+        all_types.append((t, 'object'))
+
+    typed_vocabulary = UniquePredicateList(_l2_norm_overlapping, symbol_prefix=vocabulary._prefix)
+    typed_schemata = []
+    for w in vocabulary:
+        params = [("x", sym_to_type[w])]
+        typed_vocabulary.append(w.estimator._samples, w.factors, params, masked=True, forced=True)
+    typed_vocabulary.fill_mutex_groups(vocabulary.factors)
+
+    for action_schema in schemata:
+        typed_action = ActionSchema(action_schema.name)
+        for x in action_schema.preconditions:
+            typed_x = typed_vocabulary[x.idx]
+            typed_x = typed_x.substitute([(x.parameters[0][0], typed_x.parameters[0][1])])
+            typed_x.sign = x.sign
+            typed_action.add_preconditions([typed_x])
+        for x in action_schema.effects:
+            typed_x = typed_vocabulary[x.idx]
+            typed_x = typed_x.substitute([(x.parameters[0][0], typed_x.parameters[0][1])])
+            typed_x.sign = x.sign
+            typed_action.add_effects([typed_x])
+        typed_schemata.append(typed_action)
+    return typed_schemata, all_types, groups, sym_to_type, object_types
+
+
+def append_to_schemata(schemata, appendix):
+    s_keys = {}
+    a_keys = {}
+    for i, s_i in enumerate(schemata):
+        name = tuple(s_i.name.split("_")[1:])
+        pre_id = name[2]
+        key = (name[0], name[1])
+        if key not in s_keys:
+            s_keys[key] = []
+        s_keys[key].append((i, pre_id))
+    for i, s_i in enumerate(appendix):
+        name = tuple(s_i.name.split("_")[1:])
+        part_id = name[2]
+        pre_id = name[3]
+        key = (name[0], name[1])
+        if key not in a_keys:
+            a_keys[key] = []
+        a_keys[key].append((i, part_id, pre_id))
+    new_schemata = []
+    for s_i in s_keys:
+        base_partitions = s_keys[s_i]
+        for (i, _) in base_partitions:
+            if s_i not in a_keys:
+                new_schemata.append(schemata[i])
+            else:
+                global_partitions = a_keys[s_i]
+                for (j, part_j, pre_j) in global_partitions:
+                    base_op = schemata[i]
+                    global_op = appendix[j]
+                    name = f"{base_op.name}_{part_j}_{pre_j}"
+                    schema = ActionSchema(name)
+                    schema.add_preconditions(base_op.preconditions)
+                    schema.add_preconditions(global_op.preconditions)
+                    schema.add_effects(base_op.effects)
+                    schema.add_effects(global_op.effects)
+                    new_schemata.append(schema)
+    return new_schemata
+
+
 def create_action_schema(name: str, vocabulary: UniquePredicateList, pre_prop: list[list[Proposition]],
                          eff_prop: list[Proposition]) -> list[ActionSchema]:
     """
@@ -809,6 +925,24 @@ def _knn_accuracy(x: np.ndarray, y: np.ndarray, k: int = 5, max_samples: int = 1
     x_acc = np.sum(x_decisions[:n_sample]) / n_sample
     y_acc = 1 - np.sum(x_decisions[n_sample:]) / n_sample
     return x_acc, y_acc
+
+
+def _find_factored_symbol_affordance(symbol, schemata, n_symbol):
+    covered = np.zeros(n_symbol, dtype=bool)
+    queue = [symbol]
+    while queue:
+        symbol = queue.pop()
+        for schema in schemata:
+            for p in schema.preconditions:
+                if p.idx == symbol.idx:
+                    for e in schema.effects:
+                        if (not covered[e.idx]) and (e.sign > 0) and \
+                            (e.parameters == p.parameters) and \
+                                (set(e.factors) == set(p.factors)):
+                            queue.append(e)
+                            covered[e.idx] = True
+    indices = np.where(covered)[0].tolist()
+    return indices
 
 
 def _get_option_effect(option, object_idx, schemata, vars_per_obj):
