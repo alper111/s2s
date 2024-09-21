@@ -8,6 +8,31 @@ conda activate s2s
 pip install -r requirements.txt
 ```
 
+## Example YAML configuration
+```yaml
+env: sokoban
+save_path: save/sokoban/model1
+abstraction:
+  method: "msa"
+  parameters:
+    input_dims:
+      - [objects, 9216]
+    action_classification_type: "softmax"
+    n_hidden: 256
+    n_latent: 16
+    n_layers: 4
+    action_dim: 4
+  training:
+    batch_size: 128
+    epoch: 1000
+    lr: 0.0001
+    device: "mps"
+    beta: 0.0
+    save_freq: 1
+s2s:
+s2s_global:
+```
+
 ## Outline of the code
 ```
 |-- docs
