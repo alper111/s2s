@@ -448,7 +448,9 @@ def create_lifted_precondition(partition_key: tuple[int, int],
 
 def create_precondition_clause(partition_key: tuple[int, int],
                                partitions: dict[tuple[int, int], S2SDataset],
-                               vocabulary: UniquePredicateList) -> tuple[UniquePredicateList, list[list[Proposition]]]:
+                               vocabulary: UniquePredicateList,
+                               k_cross: int = 50,
+                               lower_threshold: Optional[float] = None) -> list[list[Proposition]]:
     """
     Create the precondition clause for the given partition.
 
@@ -460,36 +462,82 @@ def create_precondition_clause(partition_key: tuple[int, int],
             The partitions.
         vocabulary : UniquePredicateList
             The vocabulary of propositions.
+        k_cross : int
+            The number of cross-validation folds.
+        lower_threshold : float
+            The lower threshold for the number of times a precondition must be found.
 
     Returns
     -------
-        vocabulary : UniquePredicateList
-            The updated vocabulary of propositions.
         precondition_clause : list[Proposition]
             The precondition clause.
     """
-    factors = find_precondition_factors(partition_key, partitions, vocabulary, k_cross=50)
+    factors = find_precondition_factors(partition_key, partitions, vocabulary,
+                                        k_cross=k_cross, n_sample=100, sym_samples=10)
+    if len(factors) == 0:
+        logger.info(f"No factors found for Pre({partition_key[0]}-{partition_key[1]}).")
+        return [[]]
+    logger.info(f"Found {len(factors)} factors for Pre({partition_key[0]}-{partition_key[1]}).")
+
     x_pos = partitions[partition_key].state
     x_neg = _generate_negative_data(partition_key, partitions, len(x_pos))
     x = np.concatenate([x_pos, x_neg])
+    n_vars = x.shape[-1]
+    x = x.reshape(x.shape[0], -1)
     y = np.concatenate([np.ones(x_pos.shape[0]), np.zeros(x_neg.shape[0])])
-    svm = SupportVectorClassifier(factors=factors)
+
+    svm_factors = [Factor([f_i+n_vars*f[1] for f_i in f[0].variables]) for f in factors]
+    svm = SupportVectorClassifier(factors=svm_factors)
     svm.fit(x, y)
 
-    preconditions = []
-    candidates = [vocabulary[vocabulary.mutex_groups[f_i]] for f_i in factors]
+    scores = svm.probability(x)
+    pos_scores = scores[:len(x_pos)]
+    neg_scores = scores[len(x_pos):]
+    pos_mean = pos_scores.mean()
+    neg_mean = neg_scores.mean()
+    pos_std = pos_scores.std()
+    neg_std = neg_scores.std()
+    if pos_mean < 0.55:
+        logger.info(f"Precondition for Pre({partition_key[0]}-{partition_key[1]}) is too weak. "
+                    f"Mean: {pos_mean}, std: {pos_std}. Assuming no preconditions.")
+        return [[]]
+    if lower_threshold is None:
+        lower_threshold = max(pos_mean-2*pos_std, (pos_mean+neg_mean)/2)
+    logger.info(f"Lower threshold: {lower_threshold:.2f}, pos mean: {pos_mean:.2f}, std: {pos_std:.2f}, "
+                f"neg mean: {neg_mean:.2f}, std: {neg_std:.2f}")
+
+    candidates = []
+    obj_idx = []
+    for svm_f in svm_factors:
+        obj_i = svm_f.variables[0] // n_vars
+        obj_idx.append(obj_i)
+        f = Factor([v_i % n_vars for v_i in svm_f.variables])
+        candidates.append(vocabulary[vocabulary.mutex_groups[f]])
     n_loop = np.prod([len(c) for c in candidates])
     if n_loop > 1000:
         logger.info(f"Finding preconditions for {n_loop} combinations of propositions...")
+    it = 0
     combs = product(*candidates)
+
+    preconditions = []
     for cand_props in combs:
         samples = np.zeros((100, x.shape[1]))
-        for p in cand_props:
-            samples[:, p.variables] = p.sample(100)
+        for o_i, p in zip(obj_idx, cand_props):
+            variables = [v_i + o_i*n_vars for v_i in p.variables]
+            samples[:, variables] = p.sample(100)
         y_prob = svm.probability(samples)
-        if y_prob.mean() > 0.5:
-            preconditions.append(list(cand_props))
-    return vocabulary, preconditions
+        if y_prob.mean() > lower_threshold:
+            subbed_props = []
+            for o_i, p in zip(obj_idx, cand_props):
+                if p.is_grounded:
+                    subbed_props.append(p)
+                else:
+                    subbed_props.append(p.substitute([(f"x{o_i}", None)]))
+            preconditions.append(subbed_props)
+        it += 1
+        if n_loop > 1000:
+            print(f"Processed {it}/{n_loop} combinations.", end="\r")
+    return preconditions
 
 
 def find_precondition_factors(partition_key: tuple[int, int],
