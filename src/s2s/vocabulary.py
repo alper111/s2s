@@ -522,20 +522,7 @@ def merge_equivalent_effects(partitions: dict[tuple[int, int], S2SDataset],
         n_partitions_option[key[0]] += 1
     for key in n_partitions_option:
         logger.info(f"Number of partitions for {key}={n_partitions_option[key]}.")
-
-
-def _generate_negative_data(partition_key: tuple[int, int],
-                            partitions: dict[tuple[int, int], S2SDataset],
-                            n_samples: int) -> np.ndarray:
-    x_neg = []
-    other_subgoals = [o for o in partitions if o != partition_key]
-    for _ in range(n_samples):
-        j = np.random.randint(len(other_subgoals))
-        o_ = other_subgoals[j]
-        ds_neg = partitions[o_]
-        sample_neg = ds_neg.state[np.random.randint(len(ds_neg.state))]
-        x_neg.append(sample_neg)
-    return np.array(x_neg)
+    return merge_map
 
 
 def lift_vocabulary_and_schemata(vocabulary, schemata, vars_per_obj, max_objects):
@@ -823,6 +810,22 @@ def _knn_independent_factor_groups(data: np.ndarray, factors: list[Factor]) -> l
     if len(independent_factor_groups) == 0:
         independent_factor_groups.append(factors)
     return independent_factor_groups
+
+
+def _generate_negative_data(partition_key: tuple[int, int],
+                            partitions: dict[tuple[int, int], S2SDataset],
+                            n_samples: int) -> np.ndarray:
+    x_neg = []
+    other_subgoals = [o for o in partitions if o != partition_key]
+    for i in range(n_samples):
+        j = np.random.randint(len(other_subgoals))
+        o_ = other_subgoals[j]
+        ds_neg = partitions[o_]
+        sample_neg = ds_neg.state[np.random.randint(len(ds_neg.state))]
+        if sample_neg.ndim == 2 and i > (n_samples // 2):
+            sample_neg = sample_neg[np.random.permutation(len(sample_neg))]
+        x_neg.append(sample_neg)
+    return np.array(x_neg)
 
 
 def _overlapping_dists(x: KernelDensityEstimator, y: KernelDensityEstimator) -> bool:
