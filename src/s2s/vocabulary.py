@@ -407,14 +407,22 @@ def append_constant_symbols(vocabulary: UniquePredicateList,
 def create_lifted_precondition(partition_key: tuple[int, int],
                                partitions: dict[tuple[int, int], S2SDataset],
                                vocabulary: UniquePredicateList,
-                               k_cross: int = 50) \
+                               k_cross: int = 50,
+                               lower_threshold: float = 0.2) \
                                 -> tuple[UniquePredicateList, list[list[Proposition]]]:
     pre_count = []
     p_k = partitions[partition_key]
     x_pos = p_k.state
-    mask_indices = np.where(np.any(p_k.mask.mean(axis=0) > 0.95, axis=1))[0].tolist()
+    if x_pos.ndim == 2:
+        x_pos = x_pos[:, np.newaxis, :]
+        mask_indices = [0]
+    else:
+        mask_indices = np.where(np.any(p_k.mask.mean(axis=0) > 0.95, axis=1))[0].tolist()
+
     for _ in range(k_cross):
         x_neg = _generate_negative_data(partition_key, partitions, len(x_pos))
+        if x_neg.ndim == 2:
+            x_neg = x_neg[:, np.newaxis, :]
         y = np.concatenate([np.ones(x_pos.shape[0]), np.zeros(x_neg.shape[0])])
         x = np.concatenate([x_pos, x_neg])
         min_samples_split = max(int(len(x)*0.05), 3)
@@ -432,7 +440,9 @@ def create_lifted_precondition(partition_key: tuple[int, int],
                     break
             if not found:
                 pre_count.append([pre, 1])
-    pre_count = [p_i[0] for p_i in pre_count if p_i[1] > k_cross * 0.5]
+    pre_count = [p_i[0] for p_i in pre_count if p_i[1] > k_cross * lower_threshold]
+    if len(pre_count) == 0:
+        return [[]]
     return pre_count
 
 
