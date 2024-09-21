@@ -1181,7 +1181,39 @@ def _find_substitution(props1, props2) -> dict[int, int]:
     return substitution
 
 
-def _merge_partitions(partition_i: S2SDataset, partition_j: S2SDataset, subs: dict[int, int]) -> S2SDataset:
+def _merge_partitions_by_map(partitions: dict[tuple[int, int], S2SDataset],
+                             merge_map: dict[tuple[int, int], tuple[int, int]]) -> dict[tuple[int, int], S2SDataset]:
+    """
+    Merge partitions by the given map.
+
+    Parameters
+    ----------
+    partitions : dict[tuple[int, int], S2SDataset]
+        The partitions.
+    merge_map : dict[tuple[int, int], tuple[int, int]]
+        The merge map.
+
+    Returns
+    -------
+    merged_partitions : dict[tuple[int, int], S2SDataset]
+        The merged partitions.
+    """
+
+    merged_partitions = {}
+    for key in partitions:
+        if key in merge_map:
+            new_key = merge_map[key]
+            if new_key not in merged_partitions:
+                merged_partitions[new_key] = deepcopy(partitions[key])
+            else:
+                merged_partitions[new_key] = _merge_partitions(merged_partitions[new_key], partitions[key])
+        else:
+            merged_partitions[key] = deepcopy(partitions[key])
+    return merged_partitions
+
+
+def _merge_partitions(partition_i: S2SDataset, partition_j: S2SDataset,
+                      subs: Optional[dict[int, int]] = None) -> S2SDataset:
     """
     Merge two partitions. The first partition is mutated in place.
 
@@ -1191,7 +1223,7 @@ def _merge_partitions(partition_i: S2SDataset, partition_j: S2SDataset, subs: di
         The first partition.
     partition_j : S2SDataset
         The second partition.
-    subs : dict[int, int]
+    subs : dict[int, int], optional
         The substitution mapping.
 
     Returns
@@ -1199,6 +1231,8 @@ def _merge_partitions(partition_i: S2SDataset, partition_j: S2SDataset, subs: di
     partition_i : S2SDataset
         The merged partition.
     """
+    if subs is None:
+        subs = {}
     sub_arr = []
     for i in range(partition_i.state.shape[1]):
         if i in subs:
