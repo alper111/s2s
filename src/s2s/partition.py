@@ -187,7 +187,7 @@ def _merge_partitions(partitions: list[S2SDataset]) -> list[S2SDataset]:
     raise NotImplementedError
 
 
-def _partition(x: np.ndarray) -> dict[int, list]:
+def _partition(x: np.ndarray, **kwargs) -> dict[int, list]:
     """
     Partition a given numpy array with x-means clustering.
 
@@ -195,19 +195,26 @@ def _partition(x: np.ndarray) -> dict[int, list]:
     ----------
     x : np.ndarray
         A numpy array to be partitioned.
+    **kwargs
+        Additional keyword arguments.
 
     Returns
     -------
     partitions : dict[int, list]
         A dictionary of partitioned indices.
+    centroids : np.ndarray
+        The final centroids.
     """
-    # TODO: make this portion deep?
-    centroids, labels, _ = _x_means(x, 1, 50)
+    clustering = DBSCAN(**kwargs).fit(x)
+    labels = clustering.labels_
+
     partitions = {}
+    centroids = {}
     for i in range(max(labels) + 1):
         indices = np.where(labels == i)[0].tolist()
         if len(indices) > 0:
             partitions[i] = indices
+            centroids[i] = x[indices].mean(axis=0)
     return partitions, centroids
 
 
