@@ -115,7 +115,8 @@ def build_schemata(vocabulary: UniquePredicateList,
     for key in pre_props:
         pre = pre_props[key]
         eff = eff_props[key]
-        action_schema = create_action_schema(f"a{key[0]}_p{key[1]}", vocabulary, pre, eff)
+        name = "_".join([str(k) for k in key])
+        action_schema = create_action_schema(f"a_{name}", vocabulary, pre, eff)
         schemata.extend(action_schema)
     return schemata
 
