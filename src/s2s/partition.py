@@ -4,6 +4,7 @@ import logging
 
 import numpy as np
 from scipy.spatial.distance import cdist
+from sklearn.cluster import DBSCAN
 
 from s2s.structs import S2SDataset, sort_dataset
 
@@ -92,7 +93,11 @@ def partition_discrete_set(dataset: S2SDataset, min_samples: int = 1) -> dict[tu
     return partitions
 
 
-def partition_to_subgoal(dataset: S2SDataset) -> dict[tuple[int, int], S2SDataset]:
+def partition_to_subgoal(dataset: S2SDataset,
+                         other_dataset: Optional[S2SDataset] = None,
+                         **kwargs) \
+                         -> tuple[dict[tuple[int, int], S2SDataset],
+                                  dict[tuple[int, int], S2SDataset]]:
     """
     Partition a dataset such that each partition corresponds to a subgoal.
 
@@ -100,42 +105,56 @@ def partition_to_subgoal(dataset: S2SDataset) -> dict[tuple[int, int], S2SDatase
     ----------
     dataset : S2SDataset
         A dataset to be partitioned.
+    other_dataset : S2SDataset, optional
+        Optional dataset to be partitioned with the same subgoals.
+    **kwargs
+        Additional keyword arguments.
 
     Returns
     -------
     partitions : dict[tuple[int, int], S2SDataset]
         A dictionary of partitioned datasets with keys as option-subgoals.
+    partitions_other : dict[tuple[int, int], S2SDataset]
+        A dictionary of partitioned datasets from the other dataset.
     """
     partitions = {}
+    other_partitions = {}
 
     # split by options
     option_partitions = _split_by_options(dataset)
+    if other_dataset is not None:
+        option_partitions_other = _split_by_options(other_dataset)
 
     # partition each option by mask and abstract effect
-    for o_i, partition_k in option_partitions.items():
-        # compute masked effect
-        flat_dataset = sort_dataset(partition_k, shuffle_only_nonmask=True, mask_pos_feats=True, flatten=True)
-        abstract_effect = flat_dataset.next_state * flat_dataset.mask
-
-        # partition by abstract effect
-        abs_eff_partitions, _ = _partition(abstract_effect)
-        logger.info(f"Option {o_i} has {len(abs_eff_partitions)} abstract effects.")
+    for o_i, partition_i in option_partitions.items():
+        partition_i_sorted = sort_dataset(partition_i)
+        flat_mask = partition_i_sorted.mask.reshape(len(partition_i_sorted.mask), -1).astype(float)
+        mask_partitions, mask_centroids = _partition(flat_mask, **kwargs)
         it = 0
-        for eff in abs_eff_partitions:
-            idx_i = abs_eff_partitions[eff]
-            partition = S2SDataset(
-                partition_k.state[idx_i],
-                partition_k.option[idx_i],
-                partition_k.reward[idx_i],
-                partition_k.next_state[idx_i],
-                partition_k.mask[idx_i]
-            )
-            partitions[(o_i, it)] = sort_dataset(partition, shuffle_only_nonmask=True)
-            it += 1
+        for m_i, m_idx in mask_partitions.items():
+            mask = mask_centroids[m_i] > 0.05
+            if not any(mask):
+                continue
+            partition_ij = S2SDataset(*partition_i_sorted[m_idx])
+            mask_reshaped = mask.reshape(partition_ij.mask[:].shape[1:])
+            partition_ij.mask[:] = mask_reshaped
+            abstract_effect = partition_ij.next_state[:, mask_reshaped]
+            abs_eff_partitions, _ = _partition(abstract_effect, **kwargs)
+            for _, e_idx in abs_eff_partitions.items():
+                partition_ijk = S2SDataset(*partition_ij[e_idx])
+                partitions[(o_i, it)] = partition_ijk
+                if other_dataset is not None:
+                    other_i = option_partitions_other[o_i]
+                    other_ij = S2SDataset(*other_i[m_idx])
+                    other_ijk = S2SDataset(*other_ij[e_idx])
+                    other_partitions[(o_i, it)] = other_ijk
+                it += 1
+
+        logger.info(f"Option {o_i} has {it} abstract effects.")
 
     # TODO: merge partitions with intersecting initiation sets
     # partitions = _merge_partitions(partitions)
-    return partitions
+    return partitions, other_partitions
 
 
 def _split_by_options(dataset: S2SDataset) -> dict[int, S2SDataset]:
