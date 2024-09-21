@@ -724,10 +724,10 @@ def _create_factored_densities(data: np.ndarray, vocabulary: UniquePredicateList
     return densities
 
 
-def _find_best_factors(x: np.ndarray, y: np.ndarray, vocabulary: UniquePredicateList) \
+def _find_factor_usage(symbol_indices: np.ndarray, y: np.ndarray, vocabulary: UniquePredicateList) \
         -> Union[list[Proposition], list[list[Proposition]]]:
     """
-    Find the best factors for the given data.
+    Find the factor usage from the given data.
 
     Parameters
     ----------
@@ -740,25 +740,38 @@ def _find_best_factors(x: np.ndarray, y: np.ndarray, vocabulary: UniquePredicate
 
     Returns
     -------
-        preconditions : list[Proposition] | list[list[Proposition]]
-            The preconditions.
+        factors : dict[tuple[Factor, int], float]
+            The usage of the (factor, object) pairs. The object index is 0
+            if the data is not object factored.
     """
     y = y.astype(int)
     n = len(y) // 2
-    symbol_indices = vocabulary.get_active_symbol_indices(x)
-    tree = DecisionTreeClassifier()
+    # symbol_indices = vocabulary.get_active_symbol_indices(x)
+    if symbol_indices.ndim == 3:
+        _, n_obj, n_vars = symbol_indices.shape
+        symbol_indices = symbol_indices.reshape(-1, n_vars*n_obj)
+    else:
+        n_vars = symbol_indices.shape[1]
+    tree = DecisionTreeClassifier(min_samples_leaf=max(int(n*0.01), 1))
     tree.fit(symbol_indices, y)
     pos_symbol_indices = symbol_indices[:n]
     counts = tree.decision_path(pos_symbol_indices).toarray().sum(axis=0)
     rules = _parse_tree(tree, counts)
-    rules = [r_i[1:] for r_i in rules if r_i[0][0] == 1 and r_i[0][1] > n*0.01]
-    factors = []
+    rules = [r_i for r_i in rules if r_i[0][0] == 1]
+    factors = {}
     for r_i in rules:
-        for decision in r_i:
+        factor_covered = {}
+        for decision in r_i[1:]:
             feat, _, _ = decision
+            obj_i = feat // n_vars
+            feat = feat % n_vars
             factor = [factor for factor in vocabulary.factors if feat in factor.variables][0]
-            if factor not in factors:
-                factors.append(factor)
+            key = (factor, obj_i)
+            if key not in factors:
+                factors[key] = 0
+            if key not in factor_covered:
+                factor_covered[key] = 1
+                factors[key] += r_i[0][1] / n
     return factors
 
 
