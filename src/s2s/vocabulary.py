@@ -1,7 +1,8 @@
 from itertools import chain, combinations, product
-from typing import Union
+from typing import Union, Optional
 import logging
 from copy import deepcopy
+from collections import defaultdict
 
 import numpy as np
 from scipy.spatial.distance import cdist
@@ -62,8 +63,10 @@ def build_vocabulary(partitions: dict[tuple[int, int], S2SDataset],
 
     # merge equivalent eff_props if there is a valid
     # substitution for the object-factored case
+    merge_map = {}
     if partition_k.is_object_factored:
-        merge_equivalent_effects(partitions, eff_props)
+        merge_map = merge_equivalent_effects(partitions, eff_props)
+
     # compute symbols over factors that are mutually exclusive.
     # important: this assumes the partition semantics, not distribution!
     vocabulary.fill_mutex_groups(factors)
