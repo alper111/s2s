@@ -18,7 +18,9 @@ __author__ = 'Steve James and George Konidaris'
 logger = logging.getLogger(__name__)
 
 
-def build_vocabulary(partitions: dict[tuple[int, int], S2SDataset], factors: list[Factor]) \
+def build_vocabulary(partitions: dict[tuple[int, int], S2SDataset],
+                     factors: list[Factor],
+                     symbol_prefix: str = "symbol_") \
         -> tuple[UniquePredicateList,
                  dict[tuple[int, int], list[list[Proposition]]],
                  dict[tuple[int, int], list[Proposition]]]:
@@ -31,6 +33,8 @@ def build_vocabulary(partitions: dict[tuple[int, int], S2SDataset], factors: lis
             The partitions of the dataset.
         factors : list[Factor]
             The factors learned from the partitions.
+        symbol_prefix : str
+            The prefix for the symbols.
 
     Returns
     -------
