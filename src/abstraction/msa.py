@@ -1,62 +1,15 @@
+import os
+
 import torch
 
+from .base import Abstraction
 
-class MarkovStateAbstraction(torch.nn.Module):
-    def __init__(self, input_dims: list[tuple], action_dim: int, n_hidden: int, n_latent: int,
-                 action_classification_type: str = "softmax"):
-        super(MarkovStateAbstraction, self).__init__()
-        self._order = [x[0] for x in input_dims]
-        self._cls_type = action_classification_type
-        self.projection = torch.nn.ModuleDict(
-            {key: torch.nn.Sequential(
-                torch.nn.Linear(value, n_hidden),
-                torch.nn.ReLU())
-             for (key, value) in input_dims})
-        self.feature = torch.nn.Sequential(
-            torch.nn.Linear(n_hidden, n_hidden),
-            torch.nn.ReLU(),
-            torch.nn.Linear(n_hidden, n_hidden),
-            torch.nn.ReLU(),
-            torch.nn.Linear(n_hidden, n_hidden),
-            torch.nn.ReLU(),
-            torch.nn.Linear(n_hidden, n_latent*2),
-            GumbelGLU(hard=True)
-        )
 
-        self.pre_attention = torch.nn.Sequential(
-            torch.nn.Linear(n_latent, n_hidden),
-            torch.nn.ReLU()
-        )
-        _att_layers = torch.nn.TransformerEncoderLayer(d_model=n_hidden, nhead=4, batch_first=True)
-        self.attention = torch.nn.TransformerEncoder(_att_layers, num_layers=4)
-        self.context = torch.nn.Embedding(4, n_hidden)
-
-        self.inverse_fc = torch.nn.Sequential(
-            torch.nn.Linear(n_hidden, n_hidden),
-            torch.nn.ReLU(),
-            torch.nn.Linear(n_hidden, action_dim)
-        )
-        self.density_fc = torch.nn.Sequential(
-            torch.nn.Linear(n_hidden, n_hidden),
-            torch.nn.ReLU(),
-            torch.nn.Linear(n_hidden, 1)
-        )
-
-        # decoder is only for visualization purposes,
-        # has nothing to do with the training
-        self.decoder = torch.nn.Sequential(
-            torch.nn.Linear(n_latent, n_hidden),
-            torch.nn.ReLU(),
-            torch.nn.Linear(n_hidden, n_hidden),
-            torch.nn.ReLU(),
-            torch.nn.Linear(n_hidden, n_hidden),
-            torch.nn.ReLU(),
-            torch.nn.Linear(n_hidden, n_hidden),
-            torch.nn.ReLU()
-        )
-        self.dec_proj = torch.nn.ModuleDict(
-            {key: torch.nn.Linear(n_hidden, value)
-             for (key, value) in input_dims})
+class MarkovStateAbstraction(Abstraction, torch.nn.Module):
+    def __init__(self, config):
+        Abstraction.__init__(self, config)
+        torch.nn.Module.__init__(self)
+        self._initialize_layers()
 
     @property
     def order(self):
@@ -66,11 +19,42 @@ class MarkovStateAbstraction(torch.nn.Module):
     def device(self):
         return next(self.parameters()).device
 
-    def inverse_forward(self, h):
-        return self.inverse_fc(h)
+    @property
+    def n_parameters(self):
+        return sum(p.numel() for p in self.parameters())
 
-    def density_forward(self, h):
-        return self.density_fc(h)
+    def fit(self, loader, config, save_path, load_path=None):
+        if load_path is not None:
+            self.load(load_path)
+
+        optimizer = torch.optim.Adam(self.parameters(), lr=config["lr"])
+        for e in range(config["epoch"]):
+            avg_inv_loss = 0
+            avg_density_loss = 0
+            avg_reg_loss = 0
+            avg_recon_loss = 0
+            for x, a, x_ in loader:
+                n = x["objects"].shape[0]
+                x_n, _, _ = loader.dataset.sample(n)
+                inv_loss, density_loss, reg_loss, recon_loss = self.loss(x, x_, x_n, a)
+                loss = inv_loss + density_loss + config["beta"]*reg_loss + recon_loss
+
+                optimizer.zero_grad()
+                loss.backward()
+                optimizer.step()
+
+                avg_inv_loss += inv_loss.item()
+                avg_density_loss += density_loss.item()
+                avg_reg_loss += reg_loss.item()
+                avg_recon_loss += recon_loss.item()
+            print(f"Epoch {e + 1}/{config['epoch']}, "
+                  f"inverse={avg_inv_loss / len(loader):.5f}, "
+                  f"density={avg_density_loss / len(loader):.5f}, "
+                  f"reg={avg_reg_loss / len(loader):.5f}, "
+                  f"recon={avg_recon_loss / len(loader):.5f}")
+
+            if (e+1) % config["save_freq"] == 0:
+                self.save(save_path)
 
     def encode(self, x, return_gating=False):
         # all this mambo jambo is just to process them in a single forward
@@ -89,11 +73,11 @@ class MarkovStateAbstraction(torch.nn.Module):
                 inputs.append(x[mod_i])
                 tokens.append(x[mod_i].shape[1])
             inputs = torch.cat(inputs, dim=1).to(self.device)
-            proj_i = self.projection[mod_i](inputs)
+            proj_i = self.enc_proj[mod_i](inputs)
             projs.append(proj_i)
             mod_tokens.append(tokens)
         projs = torch.cat(projs, dim=1)
-        feats, g = self.feature(projs)
+        feats, g = self.encoder(projs)
         outputs = []
         gatings = []
         it = 0
@@ -146,6 +130,12 @@ class MarkovStateAbstraction(torch.nn.Module):
         # just to ensure there is no accidental backprop
         h = h * mask.unsqueeze(2)
         return h
+
+    def inverse_forward(self, h):
+        return self.inverse_fc(h)
+
+    def density_forward(self, h):
+        return self.density_fc(h)
 
     def decode(self, z, tokens):
         # make sure the encodings are detached
@@ -245,6 +235,73 @@ class MarkovStateAbstraction(torch.nn.Module):
         reconstruction_loss = self.reconstruction_loss(x_bar, x)
 
         return inv_loss, density_loss, regularization, reconstruction_loss
+
+    def save(self, path):
+        os.makedirs(path, exist_ok=True)
+        name = os.path.join(path, "msa.pt")
+        torch.save(self.state_dict(), name)
+
+    def load(self, path):
+        name = os.path.join(path, "msa.pt")
+        self.load_state_dict(torch.load(name, map_location=self.device, weights_only=True))
+
+    def _initialize_layers(self):
+        self._order = [x[0] for x in self.config["input_dims"]]
+        self._cls_type = self.config["action_classification_type"]
+
+        # encoder projections
+        self.enc_proj = torch.nn.ModuleDict(
+            {key: torch.nn.Sequential(
+                torch.nn.Linear(value, self.config["n_hidden"]),
+                torch.nn.ReLU())
+             for (key, value) in self.config["input_dims"]})
+
+        # encoder
+        enc_layers = []
+        for i in range(self.config["n_layers"]):
+            if i == self.config["n_layers"] - 1:
+                enc_layers.append(torch.nn.Linear(self.config["n_hidden"], self.config["n_latent"]*2))
+                enc_layers.append(GumbelGLU(hard=True))
+            else:
+                enc_layers.append(torch.nn.Linear(self.config["n_hidden"], self.config["n_hidden"]))
+                enc_layers.append(torch.nn.ReLU())
+        self.encoder = torch.nn.Sequential(*enc_layers)
+
+        self.pre_attention = torch.nn.Sequential(
+            torch.nn.Linear(self.config["n_latent"], self.config["n_hidden"]),
+            torch.nn.ReLU()
+        )
+        _att_layers = torch.nn.TransformerEncoderLayer(d_model=self.config["n_hidden"], nhead=4, batch_first=True)
+        self.attention = torch.nn.TransformerEncoder(_att_layers, num_layers=4)
+        self.context = torch.nn.Embedding(4, self.config["n_hidden"])
+
+        self.inverse_fc = torch.nn.Sequential(
+            torch.nn.Linear(self.config["n_hidden"], self.config["n_hidden"]),
+            torch.nn.ReLU(),
+            torch.nn.Linear(self.config["n_hidden"], self.config["action_dim"])
+        )
+        self.density_fc = torch.nn.Sequential(
+            torch.nn.Linear(self.config["n_hidden"], self.config["n_hidden"]),
+            torch.nn.ReLU(),
+            torch.nn.Linear(self.config["n_hidden"], 1)
+        )
+
+        # decoder is only for visualization purposes,
+        # has nothing to do with the training
+        dec_layers = []
+        for i in range(self.config["n_layers"]):
+            if i == 0:
+                in_dim = self.config["n_latent"]
+            else:
+                in_dim = self.config["n_hidden"]
+            dec_layers.append(torch.nn.Linear(in_dim, self.config["n_hidden"]))
+            dec_layers.append(torch.nn.ReLU())
+        self.decoder = torch.nn.Sequential(*dec_layers)
+
+        # decoder projections
+        self.dec_proj = torch.nn.ModuleDict(
+            {key: torch.nn.Linear(self.config["n_hidden"], value)
+             for (key, value) in self.config["input_dims"]})
 
     def _flatten(self, x):
         return torch.cat([x[k] for k in self.order], dim=1)
