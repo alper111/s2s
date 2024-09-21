@@ -19,7 +19,8 @@ class MarkovStateAbstraction(torch.nn.Module):
             torch.nn.ReLU(),
             torch.nn.Linear(n_hidden, n_hidden),
             torch.nn.ReLU(),
-            torch.nn.Linear(n_hidden, n_latent),
+            torch.nn.Linear(n_hidden, n_latent*2),
+            GumbelGLU(hard=True)
         )
 
         self.pre_attention = torch.nn.Sequential(
@@ -185,6 +186,21 @@ class MarkovStateAbstraction(torch.nn.Module):
 
     def _flatten(self, x):
         return torch.cat([x[k] for k in self.order], dim=1)
+
+
+class GumbelGLU(torch.nn.Module):
+    def __init__(self, hard=False, T=1.0):
+        super(GumbelGLU, self).__init__()
+        self.hard = hard
+        self.T = T
+
+    def forward(self, x):
+        if not self.training:
+            return torch.nn.functional.glu(x)
+        else:
+            n_dim = x.shape[-1] // 2
+            g = gumbel_sigmoid(x[..., :n_dim], self.T, self.hard)
+            return g * x[..., n_dim:], g
 
 
 class GumbelSigmoidLayer(torch.nn.Module):
