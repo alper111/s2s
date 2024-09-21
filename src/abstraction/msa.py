@@ -72,7 +72,7 @@ class MarkovStateAbstraction(torch.nn.Module):
     def density_forward(self, h):
         return self.density_fc(h)
 
-    def encode(self, x):
+    def encode(self, x, return_gating=False):
         # all this mambo jambo is just to process them in a single forward
         projs = []
         mod_tokens = []
@@ -93,25 +93,37 @@ class MarkovStateAbstraction(torch.nn.Module):
             projs.append(proj_i)
             mod_tokens.append(tokens)
         projs = torch.cat(projs, dim=1)
-        feats = self.feature(projs)
+        feats, g = self.feature(projs)
         outputs = []
+        gatings = []
         it = 0
         for tokens in mod_tokens:
             mod_outs = []
+            mod_g = []
             for t_i in tokens:
                 mod_outs.append(feats[:, it:(it+t_i)])
+                mod_g.append(g[:, it:(it+t_i)])
                 it += t_i
             outputs.append(mod_outs)
+            gatings.append(mod_g)
 
         return_feats = []
+        return_gatings = []
         for i in range(n):
             f = []
-            for out in outputs:
+            g = []
+            for out, gate in zip(outputs, gatings):
                 f.append(out[i])
+                g.append(gate[i])
             f = torch.cat(f, dim=1)
+            g = torch.cat(g, dim=1)
             return_feats.append(f)
+            return_gatings.append(g)
         if n == 1:
             return_feats = return_feats[0]
+            return_gatings = return_gatings[0]
+        if return_gating:
+            return return_feats, return_gatings
         return return_feats
 
     def attn_forward(self, z, zn, m, mn):
