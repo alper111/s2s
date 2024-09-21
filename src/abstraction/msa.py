@@ -19,7 +19,8 @@ class MarkovStateAbstraction(torch.nn.Module):
             torch.nn.ReLU(),
             torch.nn.Linear(n_hidden, n_hidden),
             torch.nn.ReLU(),
-            torch.nn.Linear(n_hidden, n_latent),
+            torch.nn.Linear(n_hidden, n_latent*2),
+            GumbelGLU(hard=True)
         )
 
         self.pre_attention = torch.nn.Sequential(
@@ -41,6 +42,22 @@ class MarkovStateAbstraction(torch.nn.Module):
             torch.nn.Linear(n_hidden, 1)
         )
 
+        # decoder is only for visualization purposes,
+        # has nothing to do with the training
+        self.decoder = torch.nn.Sequential(
+            torch.nn.Linear(n_latent, n_hidden),
+            torch.nn.ReLU(),
+            torch.nn.Linear(n_hidden, n_hidden),
+            torch.nn.ReLU(),
+            torch.nn.Linear(n_hidden, n_hidden),
+            torch.nn.ReLU(),
+            torch.nn.Linear(n_hidden, n_hidden),
+            torch.nn.ReLU()
+        )
+        self.dec_proj = torch.nn.ModuleDict(
+            {key: torch.nn.Linear(n_hidden, value)
+             for (key, value) in input_dims})
+
     @property
     def order(self):
         return self._order
@@ -55,7 +72,7 @@ class MarkovStateAbstraction(torch.nn.Module):
     def density_forward(self, h):
         return self.density_fc(h)
 
-    def encode(self, x):
+    def encode(self, x, return_gating=False):
         # all this mambo jambo is just to process them in a single forward
         projs = []
         mod_tokens = []
@@ -76,25 +93,37 @@ class MarkovStateAbstraction(torch.nn.Module):
             projs.append(proj_i)
             mod_tokens.append(tokens)
         projs = torch.cat(projs, dim=1)
-        feats = self.feature(projs)
+        feats, g = self.feature(projs)
         outputs = []
+        gatings = []
         it = 0
         for tokens in mod_tokens:
             mod_outs = []
+            mod_g = []
             for t_i in tokens:
                 mod_outs.append(feats[:, it:(it+t_i)])
+                mod_g.append(g[:, it:(it+t_i)])
                 it += t_i
             outputs.append(mod_outs)
+            gatings.append(mod_g)
 
         return_feats = []
+        return_gatings = []
         for i in range(n):
             f = []
-            for out in outputs:
+            g = []
+            for out, gate in zip(outputs, gatings):
                 f.append(out[i])
+                g.append(gate[i])
             f = torch.cat(f, dim=1)
+            g = torch.cat(g, dim=1)
             return_feats.append(f)
+            return_gatings.append(g)
         if n == 1:
             return_feats = return_feats[0]
+            return_gatings = return_gatings[0]
+        if return_gating:
+            return return_feats, return_gatings
         return return_feats
 
     def attn_forward(self, z, zn, m, mn):
@@ -118,8 +147,21 @@ class MarkovStateAbstraction(torch.nn.Module):
         h = h * mask.unsqueeze(2)
         return h
 
-    def forward(self, x):
-        return self.encode(x)
+    def decode(self, z, tokens):
+        # make sure the encodings are detached
+        # as we don't want to backpropagate any
+        # gradients through the decoder
+        z = z.detach()
+        h = self.decoder(z)
+        h = h.split(tokens, dim=1)
+        outs = {}
+        for h_i, proj_i in zip(h, self.order):
+            out_i = self.dec_proj[proj_i](h_i)
+            outs[proj_i] = out_i
+        return outs
+
+    def forward(self, x, return_gating=False):
+        return self.encode(x, return_gating=return_gating)
 
     def inverse_loss(self, h, a, mask):
         a_logits = self.inverse_forward(h)
@@ -140,12 +182,27 @@ class MarkovStateAbstraction(torch.nn.Module):
         y_logits = self.density_forward(h).flatten()
         return torch.nn.functional.binary_cross_entropy_with_logits(y_logits, y)
 
-    def regularization(self, z, z_):
-        l1_loss = torch.nn.functional.l1_loss(z, z_)
-        return l1_loss
+    def regularization(self, g):
+        g = g.flatten(0, -2)
+        g_avg = g.mean(dim=0)
+        entropy = (g_avg*torch.log(g_avg+1e-12) + (1-g_avg)*torch.log(1-g_avg+1e-12))
+        y = torch.zeros_like(g)
+        l1_loss = torch.nn.functional.l1_loss(g, y, reduction="none")
+        loss = entropy.sum() + l1_loss.sum(dim=-1).mean()
+        return loss
+
+    def reconstruction_loss(self, x_pred, x_true):
+        loss = 0.0
+        for k in self.order:
+            loss_k = torch.nn.functional.mse_loss(x_pred[k], x_true[k].to(self.device), reduction="none")
+            loss_k = loss_k.mean(axis=-1)
+            mask_k = x_true["masks"][k].clone().to(self.device)
+            loss_k = (loss_k * mask_k).sum() / mask_k.sum()
+            loss += loss_k
+        return loss
 
     def loss(self, x, x_, x_neg, a):
-        z, z_, z_neg = self.forward([x, x_, x_neg])
+        (z, zn, z_neg), (g_z, _, _) = self.forward([x, x_, x_neg], return_gating=True)
         n_batch, n_pos, n_dim = z.shape
         n_neg = z_neg.shape[1]
 
@@ -166,10 +223,10 @@ class MarkovStateAbstraction(torch.nn.Module):
             xm_neg = torch.cat([xm_neg, mask_zeros], dim=1)
         elif n_remaining < 0:
             zeros = torch.zeros((n_batch, -n_remaining, n_dim), dtype=torch.float, device=self.device)
-            z_ = torch.cat([z_, zeros], dim=1)
+            zn = torch.cat([zn, zeros], dim=1)
             mask_zeros = torch.zeros(n_batch, -n_remaining, dtype=torch.bool, device=self.device)
             xm_ = torch.cat([xm_, mask_zeros], dim=1)
-        z_next = torch.cat([z_, z_neg], dim=0)
+        z_next = torch.cat([zn, z_neg], dim=0)
         m_next = torch.cat([xm_, xm_neg], dim=0)
 
         h_all = self.attn_forward(z_init, z_next, m_init, m_next)
@@ -180,11 +237,32 @@ class MarkovStateAbstraction(torch.nn.Module):
 
         inv_loss = self.inverse_loss(h_action, a, a_mask)
         density_loss = self.density_loss(h_density, y_density)
-        regularization = self.regularization(z, z_[:, :n_pos])
-        return inv_loss, density_loss, regularization
+        regularization = self.regularization(g_z)
+
+        # decoding is a separate process.
+        # don't backpropagate the recon loss to the encoder
+        x_bar = self.decode(z.detach(), [x[k].shape[1] for k in self.order])
+        reconstruction_loss = self.reconstruction_loss(x_bar, x)
+
+        return inv_loss, density_loss, regularization, reconstruction_loss
 
     def _flatten(self, x):
         return torch.cat([x[k] for k in self.order], dim=1)
+
+
+class GumbelGLU(torch.nn.Module):
+    def __init__(self, hard=False, T=1.0):
+        super(GumbelGLU, self).__init__()
+        self.hard = hard
+        self.T = T
+
+    def forward(self, x):
+        if not self.training:
+            return torch.nn.functional.glu(x)
+        else:
+            n_dim = x.shape[-1] // 2
+            g = gumbel_sigmoid(x[..., :n_dim], self.T, self.hard)
+            return g * x[..., n_dim:], g
 
 
 class GumbelSigmoidLayer(torch.nn.Module):

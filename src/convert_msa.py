@@ -15,11 +15,11 @@ from s2s.structs import S2SDataset
 def main(args):
     data_path = os.path.join("data", args.env)
     if args.env == "npuzzle":
-        dataset = NPuzzleDataset(data_path)
+        dataset = NPuzzleDataset(data_path, transform_action=False)
     elif args.env == "sokoban":
-        raise SokobanDataset(data_path)
+        dataset = SokobanDataset(data_path, transform_action=False)
     elif args.env == "minecraft":
-        dataset = MinecraftDataset(data_path)
+        dataset = MinecraftDataset(data_path, transform_action=False)
     else:
         raise ValueError
 
@@ -27,31 +27,46 @@ def main(args):
 
     state_dict = torch.load(args.ckpt)
     n_hidden, n_latent = state_dict["pre_attention.0.weight"].shape
-    msa = MarkovStateAbstraction(input_dims=[("objects", 786)],
-                                 action_dim=4,
+    # msa = MarkovStateAbstraction(input_dims=[("objects", 9216)],
+    #                              action_dim=4,
+    #                              n_hidden=n_hidden,
+    #                              n_latent=n_latent,
+    #                              action_classification_type="softmax").to(args.device)
+    msa = MarkovStateAbstraction(input_dims=[("agent", 3072),
+                                             ("inventory", 3072),
+                                             ("objects", 3077)],
+                                 action_dim=402,
                                  n_hidden=n_hidden,
-                                 n_latent=n_latent).to(args.device)
+                                 n_latent=n_latent,
+                                 action_classification_type="sigmoid").to(args.device)
+    msa.load_state_dict(state_dict)
     msa.eval()
 
-    state = []
-    option = []
-    next_state = []
-    mask = []
+    n_batch = len(dataset)
+    max_obj = max([len(x["objects"])+10 for x in dataset._state])
+    # max_obj = max([len(x["objects"]) for x in dataset._state])
+
+    state = np.zeros((n_batch, max_obj, n_latent), dtype=np.float32)
+    option = np.zeros((n_batch,), dtype=object)
+    next_state = np.zeros_like(state)
+    mask = np.zeros_like(state, dtype=bool)
+
+    it = 0
     for x, o, x_ in loader:
         with torch.no_grad():
-            z = msa.encode(x)
-            z_ = msa.encode(x_)
-            z_all = z["objects"].cpu().numpy().round().astype(int)
-            z_all_ = z_["objects"].cpu().numpy().round().astype(int)
-            m = np.abs(z_all - z_all_) > 1e-8
-            state.append(z_all)
-            option.append(o)
-            next_state.append(z_all_)
-            mask.append(m)
-    state = np.concatenate(state)
-    option = np.concatenate(option)
-    next_state = np.concatenate(next_state)
-    mask = np.concatenate(mask)
+            z, z_ = msa.encode([x, x_])
+
+        z_all = z.cpu().numpy()
+        z_all_ = z_.cpu().numpy()
+        diffs = np.linalg.norm(z_all - z_all_, axis=-1)
+        m = diffs > 1e-4
+
+        size, n_obj, _ = z_all.shape
+        state[it:(it+size), :n_obj] = z_all
+        next_state[it:(it+size), :n_obj] = z_all_
+        option[it:(it+size)] = [o_i[0] for o_i in o]
+        mask[it:(it+size), :n_obj] = m.reshape(size, n_obj, 1)
+        it += size
 
     dataset = S2SDataset(state, option, np.zeros(option.shape), next_state, mask)
     save_file = open(os.path.join("data", args.env, "abs_dataset.pkl"), "wb")

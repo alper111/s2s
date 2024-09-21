@@ -12,11 +12,11 @@ from environments.sokoban import SokobanDataset
 def main(args):
     data_path = os.path.join("data", args.env)
     if args.env == "npuzzle":
-        dataset = NPuzzleDataset(data_path)
+        dataset = NPuzzleDataset(data_path, exclude_keys=["global"])
     elif args.env == "sokoban":
-        dataset = SokobanDataset(data_path)
+        dataset = SokobanDataset(data_path, exclude_keys=["global"])
     elif args.env == "minecraft":
-        dataset = MinecraftDataset(data_path)
+        dataset = MinecraftDataset(data_path, exclude_keys=["global"])
     else:
         raise ValueError
 
@@ -40,7 +40,7 @@ def main(args):
             n = x["objects"].shape[0]
             x_n, _, _ = dataset.sample(n)
             inv_loss, density_loss, reg_loss = msa.loss(x, x_, x_n, a)
-            loss = inv_loss + density_loss  # + 0.01*reg_loss
+            loss = inv_loss + density_loss + args.beta*reg_loss
 
             optimizer.zero_grad()
             loss.backward()
@@ -70,6 +70,7 @@ if __name__ == "__main__":
     parser.add_argument("--device", type=str, default="cpu", help="Training device")
     parser.add_argument("--n-hidden", type=int, default=256, help="Number of hidden units")
     parser.add_argument("--n-latent", type=int, default=16, help="Number of latent units")
+    parser.add_argument("--beta", type=float, default=0.0, help="Regularization coefficient")
     parser.add_argument("--out", type=str, help="Output name")
     args = parser.parse_args()
     main(args)

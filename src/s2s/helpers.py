@@ -2,7 +2,8 @@ import numpy as np
 import torch
 
 
-def dict_to_transition(state: dict, next_state: dict) -> tuple[dict, dict, list]:
+def dict_to_transition(state: dict, next_state: dict, exclude_keys: list) \
+                       -> tuple[dict, dict, list]:
     """
     Given a (state, next_state) tuple where states are stored
     in a dictionary of modalities where each modality is a dictionary
@@ -18,6 +19,8 @@ def dict_to_transition(state: dict, next_state: dict) -> tuple[dict, dict, list]
         The state dictionary.
     next_state : dict
         The next state dictionary.
+    exclude_keys : list
+        The keys to exclude from the state.
 
     Returns
     -------
@@ -28,7 +31,7 @@ def dict_to_transition(state: dict, next_state: dict) -> tuple[dict, dict, list]
     key_order : list
         The order of keys in the state tensor.
     """
-    modalities = [m for m in state.keys() if m != "dimensions"]
+    modalities = [m for m in state["dimensions"].keys() if m not in exclude_keys]
     state_dict = {}
     next_state_dict = {}
     key_order = []

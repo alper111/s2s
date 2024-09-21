@@ -129,9 +129,11 @@ class S2SDataset:
 
 
 class UnorderedDataset(torch.utils.data.Dataset):
-    def __init__(self, root_folder: str, transform_action: bool = True, privileged: bool = False):
+    def __init__(self, root_folder: str, transform_action: bool = True,
+                 privileged: bool = False, exclude_keys: list[str] = []):
         self._root_folder = root_folder
         self._privileged = privileged
+        self.exclude_keys = exclude_keys
         if privileged:
             self._state = np.load(os.path.join(root_folder, "priv_state.npy"), allow_pickle=True)
             self._next_state = np.load(os.path.join(root_folder, "priv_next_state.npy"), allow_pickle=True)
@@ -145,7 +147,8 @@ class UnorderedDataset(torch.utils.data.Dataset):
         return len(self._state)
 
     def __getitem__(self, idx):
-        x, x_, key_order = dict_to_transition(self._state[idx], self._next_state[idx])
+        x, x_, key_order = dict_to_transition(self._state[idx], self._next_state[idx],
+                                              exclude_keys=self.exclude_keys)
         if self._transform_action:
             a = self._actions_to_label(self._action[idx], key_order)
         else:
@@ -511,7 +514,7 @@ class Proposition:
     """
 
     def __init__(self, idx: int, name: str, estimator: Optional[DensityEstimator],
-                 parameters: Optional[list[(str, str)]] = None):
+                 parameters: Optional[list[tuple[str, str]]] = None):
         """
         Create a new predicate.
 
@@ -568,6 +571,7 @@ class Proposition:
         assert isinstance(self.estimator, DensityEstimator)
         return self.estimator.sample(n_samples)
 
+    @property
     def is_grounded(self) -> bool:
         return self.parameters is None
 
@@ -637,6 +641,10 @@ class Proposition:
     def empty():
         return Proposition(-1, "empty", None)
 
+    @staticmethod
+    def not_equal(p1: str, p2: str):
+        return Proposition(-3, "=", None, [(p1, None), (p2, None)]).negate()
+
 
 class UniquePredicateList:
     """
@@ -646,7 +654,8 @@ class UniquePredicateList:
     """
 
     def __init__(self, comparator: Optional[Callable[[DensityEstimator, DensityEstimator], bool]] = None,
-                 density_type="knn"):
+                 density_type="knn",
+                 symbol_prefix: str = "symbol_"):
         """
         Create a list data structure that ensures no duplicates are added to the list.
 
@@ -657,6 +666,7 @@ class UniquePredicateList:
         """
         self._comparator = comparator if comparator is not None else lambda x, y: x is y
         self._density_type = density_type
+        self._prefix = symbol_prefix
         self._list = []
         self._projections: list[dict[int, Optional[int]]] = []
         self.mutex_groups = None
@@ -720,7 +730,7 @@ class UniquePredicateList:
             else:
                 # create a new predicate for this estimator and add it to the vocabulary
                 idx = len(self._list)
-                predicate = Proposition(idx, f'symbol_{idx}', estimator, parameters)
+                predicate = Proposition(idx, f'{self._prefix}{idx}', estimator, parameters)
                 self._list.append(predicate)
                 self._projections.append({})
                 # if there are remaining factors to be projected, add them to the queue
@@ -794,6 +804,18 @@ class UniquePredicateList:
                 return self.project(proj_f0, factors[1:])
             else:
                 return self.project(symbol, factors[1:])
+
+    def get_active_symbols(self, observation: np.ndarray, max_samples: int = 100) -> np.ndarray:
+        x = self.get_active_symbol_indices(observation, max_samples)
+        symbols = np.zeros_like(x)
+        for i, f_i in enumerate(self.factors):
+            group = np.array(self.mutex_groups[f_i])
+            symbols[..., i] = group[x[..., i]]
+        shape = symbols.shape
+        symbols = symbols.reshape(-1)
+        symbols = np.array([self._list[i] for i in symbols])
+        symbols = symbols.reshape(shape)
+        return symbols
 
     def get_active_symbol_indices(self, observation: np.ndarray,
                                   max_samples: int = 100) -> np.ndarray:
@@ -972,6 +994,14 @@ class UniquePredicateList:
     def __len__(self):
         return len(self._list)
 
+    def __repr__(self) -> str:
+        return self.__str__()
+
+    def __str__(self) -> str:
+        if len(self) < 10:
+            return f"UniquePredicateList({str(self._list)})"
+        return f"UniquePredicateList([{str(self._list[0])}, ..., {str(self._list[-1])}], size={len(self)})"
+
 
 class LiftedDecisionTree:
     def __init__(self,
@@ -989,7 +1019,7 @@ class LiftedDecisionTree:
         self._build_tree(x, y)
 
     def extract_preconditions(self):
-        assert len(self.nodes) > 0, "Decision tree not trained yet."
+        assert len(self.leaves) > 0, "Decision tree not trained yet."
         preconditions = []
         pos_leaves = [x[0] for x in self.leaves.values() if x[1] > 0.6]
         for branch in pos_leaves:
@@ -1000,10 +1030,12 @@ class LiftedDecisionTree:
                 sym = self.vocabulary.get_by_index(f_i, s_i)
 
                 if o_id == -1:
-                    sym = sym.substitute([(f"a{a_it}", None)])
+                    if sym.parameters is not None:
+                        sym = sym.substitute([(f"a{a_it}", None)])
                     a_it += 1
                 else:
-                    sym = sym.substitute([(f"x{o_id}", None)])
+                    if sym.parameters is not None:
+                        sym = sym.substitute([(f"x{o_id}", None)])
                 pre.append(sym)
             preconditions.append(pre)
         return preconditions
@@ -1175,25 +1207,41 @@ class ActionSchema:
         return self.__str__()
 
     def __str__(self):
-        precondition = ""
-        effect = ""
-        if len(self.preconditions) > 0:
-            precondition += _proposition_to_str(self.preconditions)
-        if len(self.effects) > 0:
-            effect += _proposition_to_str(self.effects)
         params = []
-        for prop in self.preconditions + self.effects:
+        types = []
+        for prop in self.preconditions:
             if prop.parameters is not None:
-                for param in prop.parameters:
+                for (param, t) in prop.parameters:
                     if param not in params:
                         params.append(param)
+                        types.append(t)
+        for prop in self.effects:
+            if prop.parameters is not None:
+                for (param, t) in prop.parameters:
+                    if param not in params:
+                        params.append(param)
+                        types.append(None)
+
+        # ensure that parameters are distinct
+        distinct_preds = []
+        if len(params) > 1:
+            for i in range(len(params)):
+                for j in range(i+1, len(params)):
+                    distinct_preds.append(Proposition.not_equal(params[i], params[j]))
+
+        precondition = ""
+        effect = ""
+        if len(self.preconditions + distinct_preds) > 0:
+            precondition += _proposition_to_str(distinct_preds + self.preconditions)
+        if len(self.effects) > 0:
+            effect += _proposition_to_str(self.effects)
 
         parameters = []
-        for param in params:
-            if param[1] is not None:
-                parameters.append(f"?{param[0]} - {param[1]}")
+        for (param, t) in zip(params, types):
+            if t is not None:
+                parameters.append(f"?{param} - {t}")
             else:
-                parameters.append(f"?{param[0]}")
+                parameters.append(f"?{param}")
         parameters = " ".join(parameters)
 
         schema = f"(:action {self.name}\n" + \
@@ -1205,9 +1253,20 @@ class ActionSchema:
 
 def _proposition_to_str(proposition: Union[Proposition, list[Proposition]]) -> str:
     if isinstance(proposition, Proposition):
-        return f"({proposition})"
+        if proposition.parameters is None:
+            return f"({proposition})"
+        else:
+            typeless_params = [(p[0], None) for p in proposition.parameters]
+            return f"({proposition.substitute(typeless_params)})"
     elif isinstance(proposition, list):
-        return " ".join([f"({p})" for p in proposition])
+        typeless_props = []
+        for p in proposition:
+            if p.parameters is not None:
+                typeless_params = [(p[0], None) for p in p.parameters]
+                typeless_props.append(f"({p.substitute(typeless_params)})")
+            else:
+                typeless_props.append(f"({p})")
+        return " ".join(typeless_props)
 
 
 class PDDLDomain:
@@ -1215,7 +1274,10 @@ class PDDLDomain:
     A PDDL domain. A domain is a set of predicates, actions, and operators that define the state space
     and the actions that can be taken in that state space.
     """
-    def __init__(self, name: str, vocabulary: UniquePredicateList, operators: list[ActionSchema], lifted: bool = False):
+    def __init__(self, name: str,
+                 vocabulary: list[UniquePredicateList],
+                 operators: list[ActionSchema],
+                 types: Optional[list[str]] = None):
         """
         Create a new PDDL domain.
 
@@ -1223,12 +1285,12 @@ class PDDLDomain:
         ----------
         name : str
             The name of the domain.
-        vocabulary : UniquePredicateList
-            The vocabulary of the domain.
+        vocabulary : list[UniquePredicateList]
+            List of vocabularies for different types of symbols.
         operators : list[ActionSchema]
             The action schemas of the domain.
-        lifted : bool, optional
-            Whether the domain is lifted or not. Default is False.
+        types : list[str], optional
+            The types of the objects in the domain.
 
         Returns
         -------
@@ -1238,81 +1300,85 @@ class PDDLDomain:
         self.vocabulary = vocabulary
         self.num_operators = len(operators)
         self.operator_str = "\n\n".join([str(x) for x in operators])
-        self.lifted = lifted
+        self.types = types
 
         self._comment = f";Automatically generated {self.name} domain PDDL file."
         self._definition = f"define (domain {self.name})"
-        self._requirements = "\t(:requirements :strips)"
+        self._requirements = "\t(:requirements :strips :typing)"
 
-    def active_symbols(self, observation: np.ndarray) -> list[Proposition]:
+    def active_symbols(self, *observations: np.ndarray) -> list[Proposition]:
         """
         Get the active symbols in the observation.
 
         Parameters
         ----------
-        observation : np.ndarray
-            The observation to evaluate.
+        observations : np.ndarray
+            Observations for each type of vocabulary.
+            i.e., `observations[i]` corresponds to `vocabulary[i]`.
 
         Returns
         -------
         active_symbols : list[Proposition]
             The active symbols in the observation.
         """
-        assert self.vocabulary.mutex_groups is not None, "Mutually exclusive factors are not defined."
+        for v in self.vocabulary:
+            assert v.mutex_groups is not None, "Mutually exclusive factors are not defined."
 
         active_symbols = {}
-        if observation.ndim == 1:
-            # global observation
-            active_symbols["global"] = self._get_active_symbols(observation)
-        else:
-            # object-factored observation
-            for o_i in range(observation.shape[0]):
-                name = f"obj{o_i}"
-                active_symbols[name] = self._get_active_symbols(observation[o_i])
-        return active_symbols
-
-    def _get_active_symbols(self, observation: np.ndarray) -> list[Proposition]:
-        active_symbols = []
-        for factor in self.vocabulary.mutex_groups:
-            group = self.vocabulary.mutex_groups[factor]
-            if len(group) == 0:
-                continue
-
-            scores = np.zeros(len(group))
-            masked_obs = observation[factor.variables].reshape(1, -1)
-            for p_i, idx in enumerate(group):
-                prop = self.vocabulary[idx]
-                scores[p_i] = prop.estimator.score_samples(masked_obs)[0]
-            active_symbols.append(self.vocabulary[group[np.argmax(scores)]])
+        for obs, vocab in zip(observations, self.vocabulary):
+            symbols = vocab.get_active_symbols(obs[np.newaxis, ...])[0]
+            if symbols.ndim == 1:
+                # global observation
+                active_symbols["global"] = symbols.tolist()
+            else:
+                # object-factored observation
+                for o_i in range(symbols.shape[0]):
+                    name = f"obj{o_i}"
+                    active_symbols[name] = symbols[o_i].tolist()
         return active_symbols
 
     def __str__(self):
         symbols = "\t\t "
-        for i, p in enumerate(self.vocabulary):
-            # TODO: need to understand lifted propositions
-            # fixed to lifted propositions for now
-            if self.lifted:
-                symbols += f"({p} ?x)"
-            else:
+        types = []
+        for v_i, vocab in enumerate(self.vocabulary):
+            for i, p in enumerate(vocab):
                 symbols += f"({p})"
 
-            if (i+1) % 6 == 0:
-                symbols += "\n\t\t"
-            else:
-                symbols += " "
+                if (i+1) % 6 == 0:
+                    symbols += "\n\t\t"
+                else:
+                    symbols += " "
+
+        if self.types is None:
+            # this part works only if predicates are typed as well
+            for v_i, vocab in enumerate(self.vocabulary):
+                for w in vocab:
+                    if w.parameters is not None and w.parameters[0][1] is not None:
+                        type_name = f"v{v_i}_{w.parameters[0][1]}"
+                        if type_name not in types:
+                            types.append(type_name)
+        else:
+            types = self.types
+
+        if len(types) > 0:
+            types = [f"{o_t} - {f_t}" for (o_t, f_t) in types]
+            types = "\n\t\t".join(types)
+            types = f"\t(:types {types})\n"
+        else:
+            types = ""
 
         predicates = f"\t(:predicates\n{symbols}\n\t)"
-
         description = f"{self._comment}\n" + \
                       f"({self._definition}\n" + \
                       f"{self._requirements}\n" + \
+                      f"{types}" + \
                       f"{predicates}\n\n" + \
                       f"{self.operator_str}\n)"
         return description
 
     def __repr__(self) -> str:
         return f"{self._comment}\n({self._definition}\n{self._requirements}\n" + \
-               f"\t...{len(self.vocabulary)} symbols...\n\t...{self.num_operators} actions...\n)"
+               f"\t...{sum([len(v) for v in self.vocabulary])} symbols...\n\t...{self.num_operators} actions...\n)"
 
 
 class PDDLProblem:
@@ -1339,6 +1405,33 @@ class PDDLProblem:
         self.domain = domain_name
         self.init_propositions = []
         self.goal_propositions = []
+        self.object_types = {}
+
+    def initialize_from_dict(self, init_dict: dict, goal_dict: dict,
+                             object_types: Optional[dict] = {}) -> None:
+        """
+        Initialize the problem from a dictionary.
+
+        Parameters
+        ----------
+        init_dict : dict
+            The dictionary containing the initial state of the problem.
+        goal_dict : dict
+            The dictionary containing the goal state of the problem.
+        object_types : dict, optional
+            The types of the objects in the problem.
+
+        Returns
+        -------
+        None
+        """
+        for obj in init_dict:
+            name = obj if obj != "global" else None
+            for prop in init_dict[obj]:
+                self.add_init_proposition(prop, name)
+            for prop in goal_dict[obj]:
+                self.add_goal_proposition(prop, name)
+        self.object_types = object_types
 
     def add_init_proposition(self, proposition: Proposition, name: str = None):
         self.init_propositions.append((proposition, name))
@@ -1348,38 +1441,58 @@ class PDDLProblem:
 
     def get_object_names(self) -> list[str]:
         obj_names = []
+        name_covered = {}
         for prop, name in self.init_propositions:
-            if name is not None and name not in obj_names:
-                obj_names.append(name)
+            if name is not None and name not in name_covered:
+                name_str = f"{name}"
+                if len(self.object_types) > 0 and name in self.object_types:
+                    name_str += f" - {self.object_types[name]}"
+                obj_names.append(name_str)
+                name_covered[name] = True
         for prop, name in self.goal_propositions:
-            if name is not None and name not in obj_names:
-                obj_names.append(name)
+            if name is not None and name not in name_covered:
+                name_str = f"{name}"
+                if len(self.object_types) > 0 and name in self.object_types:
+                    name_str += f" - {prop.parameters[0][1]}"
+                obj_names.append(name_str)
+                name_covered[name] = True
         return obj_names
 
     def __str__(self):
         init = ""
+        last_name = ""
         for i, (prop, name) in enumerate(self.init_propositions):
+            if last_name != name:
+                init += "\n\t\t"
+                last_name = name
+
+            if prop.parameters is not None:
+                prop = prop.substitute(None)
             if name is not None:
                 init += f"({prop} {name})"
             else:
                 init += f"({prop})"
-            if (i+1) % 6 == 0:
-                init += "\n\t\t"
-            elif i < len(self.init_propositions) - 1:
+            if i < len(self.init_propositions) - 1:
                 init += " "
         goal = ""
+        last_name = ""
         for i, (prop, name) in enumerate(self.goal_propositions):
+            if last_name != name:
+                goal += "\n\t\t"
+                last_name = name
+
+            if prop.parameters is not None:
+                prop = prop.substitute(None)
             if name is not None:
                 goal += f"({prop} {name})"
             else:
                 goal += f"({prop})"
-            if (i+1) % 6 == 0:
-                goal += "\n\t\t"
-            elif i < len(self.goal_propositions) - 1:
+            if i < len(self.goal_propositions) - 1:
                 goal += " "
+        object_names = '\n\t\t'.join(self.get_object_names())
         description = f"(define (problem {self.name})\n" + \
                       f"\t(:domain {self.domain})\n" + \
-                      f"\t(:objects {' '.join(self.get_object_names())})\n" + \
+                      f"\t(:objects {object_names})\n" + \
                       f"\t(:init {init})\n" + \
                       f"\t(:goal (and {goal}))\n)"
         return description
@@ -1388,9 +1501,7 @@ class PDDLProblem:
         return self.__str__()
 
 
-def sort_dataset(dataset: S2SDataset, mask_full_obj: bool = False,
-                 mask_pos_feats: bool = False, flatten: bool = False,
-                 shuffle_only_nonmask: bool = False) -> S2SDataset:
+def sort_dataset(dataset: S2SDataset, flatten: bool = False) -> S2SDataset:
     """
     Given a dataset with object-factored states, convert it to a canonical form
     where objects that are affected by the action are followed by the non-affected
@@ -1402,15 +1513,9 @@ def sort_dataset(dataset: S2SDataset, mask_full_obj: bool = False,
     ----------
     dataset : S2SDataset
         The dataset to be converted.
-    mask_full_obj : bool, optional
-        Whether to mask the full object or just the effected part of the object.
-    mask_pos_feats : bool, optional
-        Whether to mask features that are related to positions all together.
     flatten : bool, optional
         Whether to flatten the state into a fixed-size vector instead of a collection
         of objects.
-    shuffle_only_nonmask : bool, optional
-        Whether to shuffle only the non-masked objects.
 
     Returns
     -------
@@ -1435,8 +1540,7 @@ def sort_dataset(dataset: S2SDataset, mask_full_obj: bool = False,
         # add other objects that are affected by the action
         obj_mask = np.any(dataset.mask[i], axis=1)
         effected_objs, = np.where(obj_mask)
-        if not shuffle_only_nonmask:
-            np.random.shuffle(effected_objs)
+        np.random.shuffle(effected_objs)
         order.extend(effected_objs)
 
         # add other objects that are not affected by the action
@@ -1447,13 +1551,7 @@ def sort_dataset(dataset: S2SDataset, mask_full_obj: bool = False,
         for j, o_i in enumerate(order):
             state[i, j] = dataset.state[i, o_i]
             next_state[i, j] = dataset.next_state[i, o_i]
-            if mask_full_obj:
-                mask[i, j] = np.any(dataset.mask[i, o_i], axis=-1)
-            elif mask_pos_feats:
-                mask[i, j] = dataset.mask[i, o_i]
-                mask[i, j, -2:] = np.any(dataset.mask[i, o_i, -2:])
-            else:
-                mask[i, j] = dataset.mask[i, o_i]
+            mask[i, j] = dataset.mask[i, o_i]
 
     if flatten:
         state = state.reshape(n_sample, -1)

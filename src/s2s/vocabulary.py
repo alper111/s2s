@@ -1,7 +1,8 @@
 from itertools import chain, combinations, product
-from typing import Union
+from typing import Union, Optional
 import logging
 from copy import deepcopy
+from collections import defaultdict
 
 import numpy as np
 from scipy.spatial.distance import cdist
@@ -18,7 +19,9 @@ __author__ = 'Steve James and George Konidaris'
 logger = logging.getLogger(__name__)
 
 
-def build_vocabulary(partitions: dict[tuple[int, int], S2SDataset], factors: list[Factor]) \
+def build_vocabulary(partitions: dict[tuple[int, int], S2SDataset],
+                     factors: list[Factor],
+                     symbol_prefix: str = "symbol_") \
         -> tuple[UniquePredicateList,
                  dict[tuple[int, int], list[list[Proposition]]],
                  dict[tuple[int, int], list[Proposition]]]:
@@ -31,6 +34,8 @@ def build_vocabulary(partitions: dict[tuple[int, int], S2SDataset], factors: lis
             The partitions of the dataset.
         factors : list[Factor]
             The factors learned from the partitions.
+        symbol_prefix : str
+            The prefix for the symbols.
 
     Returns
     -------
@@ -42,7 +47,7 @@ def build_vocabulary(partitions: dict[tuple[int, int], S2SDataset], factors: lis
             The effects for each partition.
     """
     # vocabulary = UniquePredicateList(_overlapping_dists)
-    vocabulary = UniquePredicateList(_knn_overlapping, density_type="knn")
+    vocabulary = UniquePredicateList(_l2_norm_overlapping, density_type="knn", symbol_prefix=symbol_prefix)
     pre_props = {}
     eff_props = {}
 
@@ -58,8 +63,10 @@ def build_vocabulary(partitions: dict[tuple[int, int], S2SDataset], factors: lis
 
     # merge equivalent eff_props if there is a valid
     # substitution for the object-factored case
+    merge_map = {}
     if partition_k.is_object_factored:
-        merge_equivalent_effects(partitions, eff_props)
+        merge_map = merge_equivalent_effects(partitions, eff_props)
+
     # compute symbols over factors that are mutually exclusive.
     # important: this assumes the partition semantics, not distribution!
     vocabulary.fill_mutex_groups(factors)
@@ -78,12 +85,11 @@ def build_vocabulary(partitions: dict[tuple[int, int], S2SDataset], factors: lis
 
     # now learn preconditions in terms of the vocabulary found in the previous step
     for key in partitions:
-        # vocabulary, preds = create_precondition_clause(key, partitions, vocabulary)
-        preds = create_lifted_precondition(key, partitions, vocabulary, k_cross=10)
+        preds = create_lifted_precondition(key, partitions, vocabulary, k_cross=20, lower_threshold=0.2)
         pre_props[key] = preds
         logger.info(f"Processed Pre({key[0]}-{key[1]}); {len(preds)} subpartitions, "
                     f"{sum([len(p) for p in preds])} predicates found in total.")
-    return vocabulary, pre_props, eff_props
+    return vocabulary, pre_props, eff_props, merge_map
 
 
 def build_schemata(vocabulary: UniquePredicateList,
@@ -111,9 +117,126 @@ def build_schemata(vocabulary: UniquePredicateList,
     for key in pre_props:
         pre = pre_props[key]
         eff = eff_props[key]
-        action_schema = create_action_schema(f"a{key[0]}_p{key[1]}", vocabulary, pre, eff)
+        name = "_".join([str(k) for k in key])
+        action_schema = create_action_schema(f"a_{name}", vocabulary, pre, eff)
         schemata.extend(action_schema)
     return schemata
+
+
+def build_typed_schemata(vocabulary: UniquePredicateList, schemata: list[ActionSchema]) -> list[ActionSchema]:
+    """
+    Build typed action schemata from the given action schemata.
+
+    Parameters
+    ----------
+        vocabulary : UniquePredicateList
+            The vocabulary of propositions.
+        schemata : list[ActionSchema]
+            The action schemata.
+
+    Returns
+    -------
+        typed_schemata : list[ActionSchema]
+            The typed action schemata.
+    """
+    # Find all possible symbolic transitions starting from a symbol.
+    # Symbols that have the same possible set of transitions are
+    # defined as the same type.
+    symbol_affordances = {}
+    for w in vocabulary:
+        symbol_affordances[w] = set(_find_factored_symbol_affordance(w, schemata, len(vocabulary)))
+
+    types = {}
+    groups = {}
+    sym_to_type = {}
+    it = 0
+    factor_types = defaultdict(list)
+    for s in symbol_affordances:
+        for t in types:
+            if (symbol_affordances[s], tuple(s.factors)) == types[t]:
+                groups[t].append(s)
+                sym_to_type[s] = t
+                break
+        else:
+            name = f"type{it}"
+            types[name] = (symbol_affordances[s], tuple(s.factors))
+            groups[name] = [s]
+            sym_to_type[s] = name
+            factor_types[tuple(s.factors)].append(name)
+            it += 1
+
+    all_types = []
+    otype_idx = 0
+    object_types = {}
+    for comb in product(*tuple(factor_types.values())):
+        otype = f"otype{otype_idx}"
+        for t in comb:
+            all_types.append((otype, t))
+        otype_idx += 1
+        object_types[otype] = set(comb)
+    for t in types:
+        all_types.append((t, 'object'))
+
+    typed_vocabulary = UniquePredicateList(_l2_norm_overlapping, symbol_prefix=vocabulary._prefix)
+    typed_schemata = []
+    for w in vocabulary:
+        params = [("x", sym_to_type[w])]
+        typed_vocabulary.append(w.estimator._samples, w.factors, params, masked=True, forced=True)
+    typed_vocabulary.fill_mutex_groups(vocabulary.factors)
+
+    for action_schema in schemata:
+        typed_action = ActionSchema(action_schema.name)
+        for x in action_schema.preconditions:
+            typed_x = typed_vocabulary[x.idx]
+            typed_x = typed_x.substitute([(x.parameters[0][0], typed_x.parameters[0][1])])
+            typed_x.sign = x.sign
+            typed_action.add_preconditions([typed_x])
+        for x in action_schema.effects:
+            typed_x = typed_vocabulary[x.idx]
+            typed_x = typed_x.substitute([(x.parameters[0][0], typed_x.parameters[0][1])])
+            typed_x.sign = x.sign
+            typed_action.add_effects([typed_x])
+        typed_schemata.append(typed_action)
+    return typed_schemata, all_types, groups, sym_to_type, object_types
+
+
+def append_to_schemata(schemata, appendix):
+    s_keys = {}
+    a_keys = {}
+    for i, s_i in enumerate(schemata):
+        name = tuple(s_i.name.split("_")[1:])
+        pre_id = name[2]
+        key = (name[0], name[1])
+        if key not in s_keys:
+            s_keys[key] = []
+        s_keys[key].append((i, pre_id))
+    for i, s_i in enumerate(appendix):
+        name = tuple(s_i.name.split("_")[1:])
+        part_id = name[2]
+        pre_id = name[3]
+        key = (name[0], name[1])
+        if key not in a_keys:
+            a_keys[key] = []
+        a_keys[key].append((i, part_id, pre_id))
+    new_schemata = []
+    for s_i in s_keys:
+        base_partitions = s_keys[s_i]
+        for (i, _) in base_partitions:
+            if s_i not in a_keys:
+                new_schemata.append(schemata[i])
+            else:
+                global_partitions = a_keys[s_i]
+                for (j, part_j, pre_j) in global_partitions:
+                    base_op = schemata[i]
+                    global_op = appendix[j]
+                    name = f"{base_op.name}_{part_j}_{pre_j}"
+                    schema = ActionSchema(name)
+                    schema.add_preconditions(base_op.preconditions)
+                    schema.add_preconditions(global_op.preconditions)
+                    schema.add_effects(base_op.effects)
+                    schema.add_effects(global_op.effects)
+                    new_schemata.append(schema)
+    return new_schemata
 
 
 def create_action_schema(name: str, vocabulary: UniquePredicateList, pre_prop: list[list[Proposition]],
@@ -147,16 +270,35 @@ def create_action_schema(name: str, vocabulary: UniquePredicateList, pre_prop: l
         f_pre = set()
         f_eff = set()
         for prop in pre_i:
-            f_pre = f_pre.union(set(prop.factors))
+            for f_i in prop.factors:
+                params = tuple(prop.parameters) if prop.parameters is not None else None
+                f_pre.add((f_i, params))
         for prop in eff_prop:
-            f_eff = f_eff.union(set(prop.factors))
+            for f_i in prop.factors:
+                params = tuple(prop.parameters) if prop.parameters is not None else None
+                f_eff.add((f_i, params))
 
-        eff_neg = [x.negate() for x in pre_i if (set(x.factors).issubset(f_eff) and
-                                                 x.sign == 1)]
-        eff_proj_neg = [x for x in pre_i if (not set(x.factors).issubset(f_eff)) and
-                                            (not set(x.factors).isdisjoint(f_eff))]
-        eff_proj_pos = [vocabulary.project(x, list(f_eff)) for x in eff_proj_neg]
-        eff_proj_neg = [x.negate() for x in eff_proj_neg if x.sign == 1]
+        eff_neg = []
+        eff_proj_neg = []
+        eff_proj_pos = []
+        for x in pre_i:
+            f_x = set()
+            for f_i in x.factors:
+                params = tuple(x.parameters) if x.parameters is not None else None
+                f_x.add((f_i, params))
+            if f_x.issubset(f_eff):
+                eff_neg.append(x.negate())
+            elif not f_x.isdisjoint(f_eff):
+                eff_proj_neg.append(x.negate())
+                proj_factors = [f_i for f_i, _ in f_eff]
+                eff_proj_pos.append(vocabulary.project(x, proj_factors))
+
+        # eff_neg = [x.negate() for x in pre_i if (set(x.factors).issubset(f_eff) and
+        #                                          x.sign == 1)]
+        # eff_proj_neg = [x for x in pre_i if (not set(x.factors).issubset(f_eff)) and
+        #                                     (not set(x.factors).isdisjoint(f_eff))]
+        # eff_proj_pos = [vocabulary.project(x, list(f_eff)) for x in eff_proj_neg]
+        # eff_proj_neg = [x.negate() for x in eff_proj_neg if x.sign == 1]
 
         action_schema.add_effects(eff_prop + eff_proj_pos + eff_neg + eff_proj_neg)
         schemas.append(action_schema)
@@ -267,14 +409,22 @@ def append_constant_symbols(vocabulary: UniquePredicateList,
 def create_lifted_precondition(partition_key: tuple[int, int],
                                partitions: dict[tuple[int, int], S2SDataset],
                                vocabulary: UniquePredicateList,
-                               k_cross: int = 50) \
+                               k_cross: int = 50,
+                               lower_threshold: float = 0.2) \
                                 -> tuple[UniquePredicateList, list[list[Proposition]]]:
     pre_count = []
     p_k = partitions[partition_key]
     x_pos = p_k.state
-    mask_indices = np.where(np.any(p_k.mask.mean(axis=0) > 0.95, axis=1))[0].tolist()
+    if x_pos.ndim == 2:
+        x_pos = x_pos[:, np.newaxis, :]
+        mask_indices = [0]
+    else:
+        mask_indices = np.where(np.any(p_k.mask.mean(axis=0) > 0.95, axis=1))[0].tolist()
+
     for _ in range(k_cross):
         x_neg = _generate_negative_data(partition_key, partitions, len(x_pos))
+        if x_neg.ndim == 2:
+            x_neg = x_neg[:, np.newaxis, :]
         y = np.concatenate([np.ones(x_pos.shape[0]), np.zeros(x_neg.shape[0])])
         x = np.concatenate([x_pos, x_neg])
         min_samples_split = max(int(len(x)*0.05), 3)
@@ -292,13 +442,17 @@ def create_lifted_precondition(partition_key: tuple[int, int],
                     break
             if not found:
                 pre_count.append([pre, 1])
-    pre_count = [p_i[0] for p_i in pre_count if p_i[1] > k_cross * 0.5]
+    pre_count = [p_i[0] for p_i in pre_count if p_i[1] > k_cross * lower_threshold]
+    if len(pre_count) == 0:
+        return [[]]
     return pre_count
 
 
 def create_precondition_clause(partition_key: tuple[int, int],
                                partitions: dict[tuple[int, int], S2SDataset],
-                               vocabulary: UniquePredicateList) -> tuple[UniquePredicateList, list[list[Proposition]]]:
+                               vocabulary: UniquePredicateList,
+                               k_cross: int = 50,
+                               lower_threshold: Optional[float] = None) -> list[list[Proposition]]:
     """
     Create the precondition clause for the given partition.
 
@@ -310,57 +464,114 @@ def create_precondition_clause(partition_key: tuple[int, int],
             The partitions.
         vocabulary : UniquePredicateList
             The vocabulary of propositions.
+        k_cross : int
+            The number of cross-validation folds.
+        lower_threshold : float
+            The lower threshold for the number of times a precondition must be found.
 
     Returns
     -------
-        vocabulary : UniquePredicateList
-            The updated vocabulary of propositions.
         precondition_clause : list[Proposition]
             The precondition clause.
     """
-    factors = find_precondition_factors(partition_key, partitions, vocabulary, k_cross=50)
+    factors = find_precondition_factors(partition_key, partitions, vocabulary,
+                                        k_cross=k_cross, n_sample=100, sym_samples=10)
+    if len(factors) == 0:
+        logger.info(f"No factors found for Pre({partition_key[0]}-{partition_key[1]}).")
+        return [[]]
+    logger.info(f"Found {len(factors)} factors for Pre({partition_key[0]}-{partition_key[1]}).")
+
     x_pos = partitions[partition_key].state
     x_neg = _generate_negative_data(partition_key, partitions, len(x_pos))
     x = np.concatenate([x_pos, x_neg])
+    n_vars = x.shape[-1]
+    x = x.reshape(x.shape[0], -1)
     y = np.concatenate([np.ones(x_pos.shape[0]), np.zeros(x_neg.shape[0])])
-    svm = SupportVectorClassifier(factors=factors)
+
+    svm_factors = [Factor([f_i+n_vars*f[1] for f_i in f[0].variables]) for f in factors]
+    svm = SupportVectorClassifier(factors=svm_factors)
     svm.fit(x, y)
 
-    preconditions = []
-    candidates = [vocabulary[vocabulary.mutex_groups[f_i]] for f_i in factors]
+    scores = svm.probability(x)
+    pos_scores = scores[:len(x_pos)]
+    neg_scores = scores[len(x_pos):]
+    pos_mean = pos_scores.mean()
+    neg_mean = neg_scores.mean()
+    pos_std = pos_scores.std()
+    neg_std = neg_scores.std()
+    if pos_mean < 0.55:
+        logger.info(f"Precondition for Pre({partition_key[0]}-{partition_key[1]}) is too weak. "
+                    f"Mean: {pos_mean}, std: {pos_std}. Assuming no preconditions.")
+        return [[]]
+    if lower_threshold is None:
+        lower_threshold = max(pos_mean-2*pos_std, (pos_mean+neg_mean)/2)
+    logger.info(f"Lower threshold: {lower_threshold:.2f}, pos mean: {pos_mean:.2f}, std: {pos_std:.2f}, "
+                f"neg mean: {neg_mean:.2f}, std: {neg_std:.2f}")
+
+    candidates = []
+    obj_idx = []
+    for svm_f in svm_factors:
+        obj_i = svm_f.variables[0] // n_vars
+        obj_idx.append(obj_i)
+        f = Factor([v_i % n_vars for v_i in svm_f.variables])
+        candidates.append(vocabulary[vocabulary.mutex_groups[f]])
     n_loop = np.prod([len(c) for c in candidates])
     if n_loop > 1000:
         logger.info(f"Finding preconditions for {n_loop} combinations of propositions...")
+    it = 0
     combs = product(*candidates)
+
+    preconditions = []
     for cand_props in combs:
         samples = np.zeros((100, x.shape[1]))
-        for p in cand_props:
-            samples[:, p.variables] = p.sample(100)
+        for o_i, p in zip(obj_idx, cand_props):
+            variables = [v_i + o_i*n_vars for v_i in p.variables]
+            samples[:, variables] = p.sample(100)
         y_prob = svm.probability(samples)
-        if y_prob.mean() > 0.5:
-            preconditions.append(list(cand_props))
-    return vocabulary, preconditions
+        if y_prob.mean() > lower_threshold:
+            subbed_props = []
+            for o_i, p in zip(obj_idx, cand_props):
+                if p.is_grounded:
+                    subbed_props.append(p)
+                else:
+                    subbed_props.append(p.substitute([(f"x{o_i}", None)]))
+            preconditions.append(subbed_props)
+        it += 1
+        if n_loop > 1000:
+            print(f"Processed {it}/{n_loop} combinations.", end="\r")
+    return preconditions
 
 
 def find_precondition_factors(partition_key: tuple[int, int],
                               partitions: dict[tuple[int, int], S2SDataset],
-                              vocabulary: UniquePredicateList, k_cross: int = 20) -> list[Factor]:
+                              vocabulary: UniquePredicateList,
+                              k_cross: int = 100,
+                              n_sample: int = 100,
+                              sym_samples: int = 100) -> list[Factor]:
     x_pos = partitions[partition_key].state
+    n_sample = min(n_sample, len(x_pos))
     fac_count = {}
+    x_arr = []
     for _ in range(k_cross):
-        x_neg = _generate_negative_data(partition_key, partitions, len(x_pos))
-        x = np.concatenate([x_pos, x_neg])
-        y = np.concatenate([np.ones(x_pos.shape[0]), np.zeros(x_neg.shape[0])])
-        factors = _find_best_factors(x, y, vocabulary)
+        x_pos_ = x_pos[np.random.choice(len(x_pos), size=(n_sample,), replace=False)]
+        x_neg = _generate_negative_data(partition_key, partitions, len(x_pos_))
+        x = np.concatenate([x_pos_, x_neg])
+        x_arr.append(x)
+    x_arr = np.concatenate(x_arr)
+    x_sym = vocabulary.get_active_symbol_indices(x_arr, max_samples=sym_samples)
+    x_sym = x_sym.reshape(k_cross, -1, *x_sym.shape[1:])
+    y = np.concatenate([np.ones(x_pos_.shape[0]), np.zeros(x_neg.shape[0])])
+    for k in range(k_cross):
+        factor_usage = _find_factor_usage(x_sym[k], y, vocabulary)
         # count the number of times each proposition is selected
-        for factor in factors:
+        for factor in factor_usage:
             if factor not in fac_count:
                 fac_count[factor] = 0
-            fac_count[factor] += 1
+            fac_count[factor] += factor_usage[factor]
 
     factors = []
     for fac in fac_count:
-        if fac_count[fac] >= k_cross * 0.9:
+        if fac_count[fac] > k_cross * 0.5:
             factors.append(fac)
     return factors
 
@@ -369,6 +580,7 @@ def merge_equivalent_effects(partitions: dict[tuple[int, int], S2SDataset],
                              eff_props: dict[tuple[int, int], list[Proposition]]):
     all_keys = list(partitions.keys())
     options = []
+    merge_map = {}
     for (opt, _) in all_keys:
         if opt not in options:
             options.append(opt)
@@ -391,6 +603,7 @@ def merge_equivalent_effects(partitions: dict[tuple[int, int], S2SDataset],
                     logger.info(f"Merging Eff({key_i[0]}-{key_i[1]}) and Eff({key_j[0]}-{key_j[1]})...")
                     partition_i = _merge_partitions(partitions[key_i], partitions[key_j], subs)
                     partitions[key_i] = partition_i
+                    merge_map[key_j] = key_i
                     # remove the merged partition
                     del partitions[key_j]
                     del eff_props[key_j]
@@ -402,20 +615,7 @@ def merge_equivalent_effects(partitions: dict[tuple[int, int], S2SDataset],
         n_partitions_option[key[0]] += 1
     for key in n_partitions_option:
         logger.info(f"Number of partitions for {key}={n_partitions_option[key]}.")
-
-
-def _generate_negative_data(partition_key: tuple[int, int],
-                            partitions: dict[tuple[int, int], S2SDataset],
-                            n_samples: int) -> np.ndarray:
-    x_neg = []
-    other_subgoals = [o for o in partitions if o != partition_key]
-    for _ in range(n_samples):
-        j = np.random.randint(len(other_subgoals))
-        o_ = other_subgoals[j]
-        ds_neg = partitions[o_]
-        sample_neg = ds_neg.state[np.random.randint(len(ds_neg.state))]
-        x_neg.append(sample_neg)
-    return np.array(x_neg)
+    return merge_map
 
 
 def lift_vocabulary_and_schemata(vocabulary, schemata, vars_per_obj, max_objects):
@@ -526,10 +726,10 @@ def _create_factored_densities(data: np.ndarray, vocabulary: UniquePredicateList
     return densities
 
 
-def _find_best_factors(x: np.ndarray, y: np.ndarray, vocabulary: UniquePredicateList) \
+def _find_factor_usage(symbol_indices: np.ndarray, y: np.ndarray, vocabulary: UniquePredicateList) \
         -> Union[list[Proposition], list[list[Proposition]]]:
     """
-    Find the best factors for the given data.
+    Find the factor usage from the given data.
 
     Parameters
     ----------
@@ -542,25 +742,38 @@ def _find_best_factors(x: np.ndarray, y: np.ndarray, vocabulary: UniquePredicate
 
     Returns
     -------
-        preconditions : list[Proposition] | list[list[Proposition]]
-            The preconditions.
+        factors : dict[tuple[Factor, int], float]
+            The usage of the (factor, object) pairs. The object index is 0
+            if the data is not object factored.
     """
     y = y.astype(int)
     n = len(y) // 2
-    symbol_indices = vocabulary.get_active_symbol_indices(x)
-    tree = DecisionTreeClassifier()
+    # symbol_indices = vocabulary.get_active_symbol_indices(x)
+    if symbol_indices.ndim == 3:
+        _, n_obj, n_vars = symbol_indices.shape
+        symbol_indices = symbol_indices.reshape(-1, n_vars*n_obj)
+    else:
+        n_vars = symbol_indices.shape[1]
+    tree = DecisionTreeClassifier(min_samples_leaf=max(int(n*0.01), 1))
     tree.fit(symbol_indices, y)
     pos_symbol_indices = symbol_indices[:n]
     counts = tree.decision_path(pos_symbol_indices).toarray().sum(axis=0)
     rules = _parse_tree(tree, counts)
-    rules = [r_i[1:] for r_i in rules if r_i[0][0] == 1 and r_i[0][1] > n*0.01]
-    factors = []
+    rules = [r_i for r_i in rules if r_i[0][0] == 1]
+    factors = {}
     for r_i in rules:
-        for decision in r_i:
+        factor_covered = {}
+        for decision in r_i[1:]:
             feat, _, _ = decision
+            obj_i = feat // n_vars
+            feat = feat % n_vars
             factor = [factor for factor in vocabulary.factors if feat in factor.variables][0]
-            if factor not in factors:
-                factors.append(factor)
+            key = (factor, obj_i)
+            if key not in factors:
+                factors[key] = 0
+            if key not in factor_covered:
+                factor_covered[key] = 1
+                factors[key] += r_i[0][1] / n
     return factors
 
 
@@ -705,6 +918,22 @@ def _knn_independent_factor_groups(data: np.ndarray, factors: list[Factor]) -> l
     return independent_factor_groups
 
 
+def _generate_negative_data(partition_key: tuple[int, int],
+                            partitions: dict[tuple[int, int], S2SDataset],
+                            n_samples: int) -> np.ndarray:
+    x_neg = []
+    other_subgoals = [o for o in partitions if o != partition_key]
+    for i in range(n_samples):
+        j = np.random.randint(len(other_subgoals))
+        o_ = other_subgoals[j]
+        ds_neg = partitions[o_]
+        sample_neg = ds_neg.state[np.random.randint(len(ds_neg.state))]
+        if sample_neg.ndim == 2 and i > (n_samples // 2):
+            sample_neg = sample_neg[np.random.permutation(len(sample_neg))]
+        x_neg.append(sample_neg)
+    return np.array(x_neg)
+
+
 def _overlapping_dists(x: KernelDensityEstimator, y: KernelDensityEstimator) -> bool:
     """
     A measure of similarity from the original paper that compares means, mins and maxes.
@@ -809,6 +1038,24 @@ def _knn_accuracy(x: np.ndarray, y: np.ndarray, k: int = 5, max_samples: int = 1
     x_acc = np.sum(x_decisions[:n_sample]) / n_sample
     y_acc = 1 - np.sum(x_decisions[n_sample:]) / n_sample
     return x_acc, y_acc
+
+
+def _find_factored_symbol_affordance(symbol, schemata, n_symbol):
+    covered = np.zeros(n_symbol, dtype=bool)
+    queue = [symbol]
+    while queue:
+        symbol = queue.pop()
+        for schema in schemata:
+            for p in schema.preconditions:
+                if p.idx == symbol.idx:
+                    for e in schema.effects:
+                        if (not covered[e.idx]) and (e.sign > 0) and \
+                            (e.parameters == p.parameters) and \
+                                (set(e.factors) == set(p.factors)):
+                            queue.append(e)
+                            covered[e.idx] = True
+    indices = np.where(covered)[0].tolist()
+    return indices
 
 
 def _get_option_effect(option, object_idx, schemata, vars_per_obj):
@@ -936,7 +1183,39 @@ def _find_substitution(props1, props2) -> dict[int, int]:
     return substitution
 
 
-def _merge_partitions(partition_i: S2SDataset, partition_j: S2SDataset, subs: dict[int, int]) -> S2SDataset:
+def _merge_partitions_by_map(partitions: dict[tuple[int, int], S2SDataset],
+                             merge_map: dict[tuple[int, int], tuple[int, int]]) -> dict[tuple[int, int], S2SDataset]:
+    """
+    Merge partitions by the given map.
+
+    Parameters
+    ----------
+    partitions : dict[tuple[int, int], S2SDataset]
+        The partitions.
+    merge_map : dict[tuple[int, int], tuple[int, int]]
+        The merge map.
+
+    Returns
+    -------
+    merged_partitions : dict[tuple[int, int], S2SDataset]
+        The merged partitions.
+    """
+
+    merged_partitions = {}
+    for key in partitions:
+        if key in merge_map:
+            new_key = merge_map[key]
+            if new_key not in merged_partitions:
+                merged_partitions[new_key] = deepcopy(partitions[key])
+            else:
+                merged_partitions[new_key] = _merge_partitions(merged_partitions[new_key], partitions[key])
+        else:
+            merged_partitions[key] = deepcopy(partitions[key])
+    return merged_partitions
+
+
+def _merge_partitions(partition_i: S2SDataset, partition_j: S2SDataset,
+                      subs: Optional[dict[int, int]] = None) -> S2SDataset:
     """
     Merge two partitions. The first partition is mutated in place.
 
@@ -946,7 +1225,7 @@ def _merge_partitions(partition_i: S2SDataset, partition_j: S2SDataset, subs: di
         The first partition.
     partition_j : S2SDataset
         The second partition.
-    subs : dict[int, int]
+    subs : dict[int, int], optional
         The substitution mapping.
 
     Returns
@@ -954,6 +1233,8 @@ def _merge_partitions(partition_i: S2SDataset, partition_j: S2SDataset, subs: di
     partition_i : S2SDataset
         The merged partition.
     """
+    if subs is None:
+        subs = {}
     sub_arr = []
     for i in range(partition_i.state.shape[1]):
         if i in subs:
