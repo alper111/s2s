@@ -542,23 +542,34 @@ def create_precondition_clause(partition_key: tuple[int, int],
 
 def find_precondition_factors(partition_key: tuple[int, int],
                               partitions: dict[tuple[int, int], S2SDataset],
-                              vocabulary: UniquePredicateList, k_cross: int = 20) -> list[Factor]:
+                              vocabulary: UniquePredicateList,
+                              k_cross: int = 100,
+                              n_sample: int = 100,
+                              sym_samples: int = 100) -> list[Factor]:
     x_pos = partitions[partition_key].state
+    n_sample = min(n_sample, len(x_pos))
     fac_count = {}
+    x_arr = []
     for _ in range(k_cross):
-        x_neg = _generate_negative_data(partition_key, partitions, len(x_pos))
-        x = np.concatenate([x_pos, x_neg])
-        y = np.concatenate([np.ones(x_pos.shape[0]), np.zeros(x_neg.shape[0])])
-        factors = _find_best_factors(x, y, vocabulary)
+        x_pos_ = x_pos[np.random.choice(len(x_pos), size=(n_sample,), replace=False)]
+        x_neg = _generate_negative_data(partition_key, partitions, len(x_pos_))
+        x = np.concatenate([x_pos_, x_neg])
+        x_arr.append(x)
+    x_arr = np.concatenate(x_arr)
+    x_sym = vocabulary.get_active_symbol_indices(x_arr, max_samples=sym_samples)
+    x_sym = x_sym.reshape(k_cross, -1, *x_sym.shape[1:])
+    y = np.concatenate([np.ones(x_pos_.shape[0]), np.zeros(x_neg.shape[0])])
+    for k in range(k_cross):
+        factor_usage = _find_factor_usage(x_sym[k], y, vocabulary)
         # count the number of times each proposition is selected
-        for factor in factors:
+        for factor in factor_usage:
             if factor not in fac_count:
                 fac_count[factor] = 0
-            fac_count[factor] += 1
+            fac_count[factor] += factor_usage[factor]
 
     factors = []
     for fac in fac_count:
-        if fac_count[fac] >= k_cross * 0.9:
+        if fac_count[fac] > k_cross * 0.5:
             factors.append(fac)
     return factors
 
