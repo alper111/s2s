@@ -42,6 +42,22 @@ class MarkovStateAbstraction(torch.nn.Module):
             torch.nn.Linear(n_hidden, 1)
         )
 
+        # decoder is only for visualization purposes,
+        # has nothing to do with the training
+        self.decoder = torch.nn.Sequential(
+            torch.nn.Linear(n_latent, n_hidden),
+            torch.nn.ReLU(),
+            torch.nn.Linear(n_hidden, n_hidden),
+            torch.nn.ReLU(),
+            torch.nn.Linear(n_hidden, n_hidden),
+            torch.nn.ReLU(),
+            torch.nn.Linear(n_hidden, n_hidden),
+            torch.nn.ReLU()
+        )
+        self.dec_proj = torch.nn.ModuleDict(
+            {key: torch.nn.Linear(n_hidden, value)
+             for (key, value) in input_dims})
+
     @property
     def order(self):
         return self._order
@@ -119,8 +135,21 @@ class MarkovStateAbstraction(torch.nn.Module):
         h = h * mask.unsqueeze(2)
         return h
 
-    def forward(self, x):
-        return self.encode(x)
+    def decode(self, z, tokens):
+        # make sure the encodings are detached
+        # as we don't want to backpropagate any
+        # gradients through the decoder
+        z = z.detach()
+        h = self.decoder(z)
+        h = h.split(tokens, dim=1)
+        outs = {}
+        for h_i, proj_i in zip(h, self.order):
+            out_i = self.dec_proj[proj_i](h_i)
+            outs[proj_i] = out_i
+        return outs
+
+    def forward(self, x, return_gating=False):
+        return self.encode(x, return_gating=return_gating)
 
     def inverse_loss(self, h, a, mask):
         a_logits = self.inverse_forward(h)
