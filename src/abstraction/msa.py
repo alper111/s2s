@@ -182,12 +182,27 @@ class MarkovStateAbstraction(torch.nn.Module):
         y_logits = self.density_forward(h).flatten()
         return torch.nn.functional.binary_cross_entropy_with_logits(y_logits, y)
 
-    def regularization(self, z, z_):
-        l1_loss = torch.nn.functional.l1_loss(z, z_)
-        return l1_loss
+    def regularization(self, g):
+        g = g.flatten(0, -2)
+        g_avg = g.mean(dim=0)
+        entropy = (g_avg*torch.log(g_avg+1e-12) + (1-g_avg)*torch.log(1-g_avg+1e-12))
+        y = torch.zeros_like(g)
+        l1_loss = torch.nn.functional.l1_loss(g, y, reduction="none")
+        loss = entropy.sum() + l1_loss.sum(dim=-1).mean()
+        return loss
+
+    def reconstruction_loss(self, x_pred, x_true):
+        loss = 0.0
+        for k in self.order:
+            loss_k = torch.nn.functional.mse_loss(x_pred[k], x_true[k].to(self.device), reduction="none")
+            loss_k = loss_k.mean(axis=-1)
+            mask_k = x_true["masks"][k].clone().to(self.device)
+            loss_k = (loss_k * mask_k).sum() / mask_k.sum()
+            loss += loss_k
+        return loss
 
     def loss(self, x, x_, x_neg, a):
-        z, z_, z_neg = self.forward([x, x_, x_neg])
+        (z, zn, z_neg), (g_z, _, _) = self.forward([x, x_, x_neg], return_gating=True)
         n_batch, n_pos, n_dim = z.shape
         n_neg = z_neg.shape[1]
 
@@ -208,10 +223,10 @@ class MarkovStateAbstraction(torch.nn.Module):
             xm_neg = torch.cat([xm_neg, mask_zeros], dim=1)
         elif n_remaining < 0:
             zeros = torch.zeros((n_batch, -n_remaining, n_dim), dtype=torch.float, device=self.device)
-            z_ = torch.cat([z_, zeros], dim=1)
+            zn = torch.cat([zn, zeros], dim=1)
             mask_zeros = torch.zeros(n_batch, -n_remaining, dtype=torch.bool, device=self.device)
             xm_ = torch.cat([xm_, mask_zeros], dim=1)
-        z_next = torch.cat([z_, z_neg], dim=0)
+        z_next = torch.cat([zn, z_neg], dim=0)
         m_next = torch.cat([xm_, xm_neg], dim=0)
 
         h_all = self.attn_forward(z_init, z_next, m_init, m_next)
@@ -222,8 +237,14 @@ class MarkovStateAbstraction(torch.nn.Module):
 
         inv_loss = self.inverse_loss(h_action, a, a_mask)
         density_loss = self.density_loss(h_density, y_density)
-        regularization = self.regularization(z, z_[:, :n_pos])
-        return inv_loss, density_loss, regularization
+        regularization = self.regularization(g_z)
+
+        # decoding is a separate process.
+        # don't backpropagate the recon loss to the encoder
+        x_bar = self.decode(z.detach(), [x[k].shape[1] for k in self.order])
+        reconstruction_loss = self.reconstruction_loss(x_bar, x)
+
+        return inv_loss, density_loss, regularization, reconstruction_loss
 
     def _flatten(self, x):
         return torch.cat([x[k] for k in self.order], dim=1)
