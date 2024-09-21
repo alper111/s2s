@@ -268,16 +268,35 @@ def create_action_schema(name: str, vocabulary: UniquePredicateList, pre_prop: l
         f_pre = set()
         f_eff = set()
         for prop in pre_i:
-            f_pre = f_pre.union(set(prop.factors))
+            for f_i in prop.factors:
+                params = tuple(prop.parameters) if prop.parameters is not None else None
+                f_pre.add((f_i, params))
         for prop in eff_prop:
-            f_eff = f_eff.union(set(prop.factors))
+            for f_i in prop.factors:
+                params = tuple(prop.parameters) if prop.parameters is not None else None
+                f_eff.add((f_i, params))
 
-        eff_neg = [x.negate() for x in pre_i if (set(x.factors).issubset(f_eff) and
-                                                 x.sign == 1)]
-        eff_proj_neg = [x for x in pre_i if (not set(x.factors).issubset(f_eff)) and
-                                            (not set(x.factors).isdisjoint(f_eff))]
-        eff_proj_pos = [vocabulary.project(x, list(f_eff)) for x in eff_proj_neg]
-        eff_proj_neg = [x.negate() for x in eff_proj_neg if x.sign == 1]
+        eff_neg = []
+        eff_proj_neg = []
+        eff_proj_pos = []
+        for x in pre_i:
+            f_x = set()
+            for f_i in x.factors:
+                params = tuple(x.parameters) if x.parameters is not None else None
+                f_x.add((f_i, params))
+            if f_x.issubset(f_eff):
+                eff_neg.append(x.negate())
+            elif not f_x.isdisjoint(f_eff):
+                eff_proj_neg.append(x.negate())
+                proj_factors = [f_i for f_i, _ in f_eff]
+                eff_proj_pos.append(vocabulary.project(x, proj_factors))
+
+        # eff_neg = [x.negate() for x in pre_i if (set(x.factors).issubset(f_eff) and
+        #                                          x.sign == 1)]
+        # eff_proj_neg = [x for x in pre_i if (not set(x.factors).issubset(f_eff)) and
+        #                                     (not set(x.factors).isdisjoint(f_eff))]
+        # eff_proj_pos = [vocabulary.project(x, list(f_eff)) for x in eff_proj_neg]
+        # eff_proj_neg = [x.negate() for x in eff_proj_neg if x.sign == 1]
 
         action_schema.add_effects(eff_prop + eff_proj_pos + eff_neg + eff_proj_neg)
         schemas.append(action_schema)
