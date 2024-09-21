@@ -47,7 +47,7 @@ def build_vocabulary(partitions: dict[tuple[int, int], S2SDataset],
             The effects for each partition.
     """
     # vocabulary = UniquePredicateList(_overlapping_dists)
-    vocabulary = UniquePredicateList(_knn_overlapping, density_type="knn")
+    vocabulary = UniquePredicateList(_l2_norm_overlapping, density_type="knn", symbol_prefix=symbol_prefix)
     pre_props = {}
     eff_props = {}
 
