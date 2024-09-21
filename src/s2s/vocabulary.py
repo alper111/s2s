@@ -578,6 +578,7 @@ def merge_equivalent_effects(partitions: dict[tuple[int, int], S2SDataset],
                              eff_props: dict[tuple[int, int], list[Proposition]]):
     all_keys = list(partitions.keys())
     options = []
+    merge_map = {}
     for (opt, _) in all_keys:
         if opt not in options:
             options.append(opt)
@@ -600,6 +601,7 @@ def merge_equivalent_effects(partitions: dict[tuple[int, int], S2SDataset],
                     logger.info(f"Merging Eff({key_i[0]}-{key_i[1]}) and Eff({key_j[0]}-{key_j[1]})...")
                     partition_i = _merge_partitions(partitions[key_i], partitions[key_j], subs)
                     partitions[key_i] = partition_i
+                    merge_map[key_j] = key_i
                     # remove the merged partition
                     del partitions[key_j]
                     del eff_props[key_j]
