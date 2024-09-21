@@ -85,12 +85,11 @@ def build_vocabulary(partitions: dict[tuple[int, int], S2SDataset],
 
     # now learn preconditions in terms of the vocabulary found in the previous step
     for key in partitions:
-        # vocabulary, preds = create_precondition_clause(key, partitions, vocabulary)
-        preds = create_lifted_precondition(key, partitions, vocabulary, k_cross=10)
+        preds = create_lifted_precondition(key, partitions, vocabulary, k_cross=20, lower_threshold=0.2)
         pre_props[key] = preds
         logger.info(f"Processed Pre({key[0]}-{key[1]}); {len(preds)} subpartitions, "
                     f"{sum([len(p) for p in preds])} predicates found in total.")
-    return vocabulary, pre_props, eff_props
+    return vocabulary, pre_props, eff_props, merge_map
 
 
 def build_schemata(vocabulary: UniquePredicateList,
