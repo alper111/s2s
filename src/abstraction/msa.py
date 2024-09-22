@@ -146,6 +146,8 @@ class MarkovStateAbstraction(Abstraction, torch.nn.Module):
         h = h.split(tokens, dim=1)
         outs = {}
         for h_i, proj_i in zip(h, self.order):
+            if h_i.numel() == 0:
+                continue
             out_i = self.dec_proj[proj_i](h_i)
             outs[proj_i] = out_i
         return outs
