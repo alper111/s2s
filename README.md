@@ -12,6 +12,7 @@ pip install -r requirements.txt
 ```yaml
 env: sokoban
 save_path: save/sokoban/model1
+
 abstraction:
   method: "msa"
   parameters:
@@ -29,8 +30,32 @@ abstraction:
     device: "mps"
     beta: 0.0
     save_freq: 1
+
 s2s:
+  partition:
+    eps: 0.5
+    mask_threshold: 0.05
+  factor_threshold: 0.05
+  density_type: "knn"
+  comparison: "l2"
+  independency_test: "gaussian"
+  k_cross: 20
+  pre_threshold: 0.20
+  min_samples_split: 0.05
+  pos_threshold: 0.6
+
 s2s_global:
+  partition:
+    eps: 0.5
+    mask_threshold: 0.05
+  factor_threshold: 0.05
+  density_type: "knn"
+  comparison: "l2"
+  independency_test: "gaussian"
+  k_cross: 20
+  pre_threshold: 0.20
+  min_samples_split: 0.05
+  pos_threshold: 0.6
 ```
 
 ## Outline of the code
