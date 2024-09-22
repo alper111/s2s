@@ -12,6 +12,7 @@ pip install -r requirements.txt
 ```yaml
 env: sokoban
 save_path: save/sokoban/model1
+fast_downward_path: "~/downward/fast-downward.py"
 
 abstraction:
   method: "msa"
