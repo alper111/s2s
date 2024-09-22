@@ -21,7 +21,16 @@ logger = logging.getLogger(__name__)
 
 def build_vocabulary(partitions: dict[tuple[int, int], S2SDataset],
                      factors: list[Factor],
-                     symbol_prefix: str = "symbol_") \
+                     symbol_prefix: str = "symbol_",
+                     density_type: str = "knn",
+                     comparison: str = "l2",
+                     factor_threshold: float = 0.01,
+                     independency_test: str = "gaussian",
+                     k_cross: int = 20,
+                     pre_threshold: float = 0.2,
+                     min_samples_split: Union[float, int] = 0.05,
+                     pos_threshold: float = 0.6
+                     ) \
         -> tuple[UniquePredicateList,
                  dict[tuple[int, int], list[list[Proposition]]],
                  dict[tuple[int, int], list[Proposition]]]:
@@ -36,6 +45,23 @@ def build_vocabulary(partitions: dict[tuple[int, int], S2SDataset],
             The factors learned from the partitions.
         symbol_prefix : str
             The prefix for the symbols.
+        density_type : str
+            The type of density estimator to use. Default is "knn".
+        comparison : str
+            The comparison method to detect duplicate symbols. Default is "l2".
+        factor_threshold : float
+            The threshold for a factor to be considered as modified by the partition. Default is 0.01.
+        independency_test : str
+            The independency test to use. Default is "gaussian".
+        k_cross : int
+            The number of cross-validation folds for learning preconditions. Default is 20.
+        pre_threshold : float
+            The lower threshold for the number of times a precondition must be found. Default is 0.2.
+        min_samples_split : float | int
+            The minimum number of samples required to split an internal node. If float, it represents the
+            proportion of the dataset. Otherwise, it represents the absolute number of samples. Default is 0.05.
+        pos_threshold : float
+            The threshold for a leaf node to be considered as a positive sample. Default is 0.6.
 
     Returns
     -------
@@ -46,18 +72,24 @@ def build_vocabulary(partitions: dict[tuple[int, int], S2SDataset],
         eff_props : dict[tuple[int, int], list[Proposition]]
             The effects for each partition.
     """
-    # vocabulary = UniquePredicateList(_overlapping_dists)
-    vocabulary = UniquePredicateList(_l2_norm_overlapping, density_type="knn", symbol_prefix=symbol_prefix)
+    if comparison == "l2":
+        comp_func = _l2_norm_overlapping
+    elif comparison == "knn":
+        comp_func = _knn_overlapping
+    else:
+        comp_func = _overlapping_dists
+
+    vocabulary = UniquePredicateList(comp_func, density_type=density_type, symbol_prefix=symbol_prefix)
     pre_props = {}
     eff_props = {}
 
     # first add the factors to the partitions (mutates partitions!)
-    add_factors_to_partitions(partitions, factors, threshold=0.01)
+    add_factors_to_partitions(partitions, factors, threshold=factor_threshold)
 
     # create effect symbols
     for key in partitions:
         partition_k = partitions[key]
-        vocabulary, preds = create_effect_clause(vocabulary, partition_k)
+        vocabulary, preds = create_effect_clause(vocabulary, partition_k, independency_test=independency_test)
         logger.info(f"Processed Eff({key[0]}-{key[1]}); {len(preds)} predicates found.")
         eff_props[key] = preds
 
@@ -85,7 +117,10 @@ def build_vocabulary(partitions: dict[tuple[int, int], S2SDataset],
 
     # now learn preconditions in terms of the vocabulary found in the previous step
     for key in partitions:
-        preds = create_lifted_precondition(key, partitions, vocabulary, k_cross=20, lower_threshold=0.2)
+        preds = create_lifted_precondition(key, partitions, vocabulary,
+                                           k_cross=k_cross, lower_threshold=pre_threshold,
+                                           min_samples_split=min_samples_split,
+                                           pos_threshold=pos_threshold)
         pre_props[key] = preds
         logger.info(f"Processed Pre({key[0]}-{key[1]}); {len(preds)} subpartitions, "
                     f"{sum([len(p) for p in preds])} predicates found in total.")
@@ -305,7 +340,8 @@ def create_action_schema(name: str, vocabulary: UniquePredicateList, pre_prop: l
     return schemas
 
 
-def create_effect_clause(vocabulary: UniquePredicateList, partition: S2SDataset) \
+def create_effect_clause(vocabulary: UniquePredicateList, partition: S2SDataset,
+                         independency_test: str = "gaussian") \
         -> Union[list[KernelDensityEstimator], list[list[KernelDensityEstimator]]]:
     """
     Create the effect clause for the given partition.
@@ -316,6 +352,8 @@ def create_effect_clause(vocabulary: UniquePredicateList, partition: S2SDataset)
             The vocabulary of propositions.
         partition : S2SDataset
             The partition to create the effect clause for.
+        independency_test : str
+            The independency test to use. Default is "gaussian".
 
     Returns
     -------
@@ -334,13 +372,14 @@ def create_effect_clause(vocabulary: UniquePredicateList, partition: S2SDataset)
             if len(obj_factors) == 0:
                 continue
             densities = _create_factored_densities(partition.next_state[:, i], vocabulary, obj_factors,
-                                                   lifted=True)
+                                                   lifted=True, independency_test=independency_test)
             for prop in densities:
                 prop = prop.substitute([(f"x{i}", None)])
                 effect_clause.append(prop)
     else:
         if len(partition.factors) != 0:
-            densities = _create_factored_densities(partition.next_state, vocabulary, partition.factors)
+            densities = _create_factored_densities(partition.next_state, vocabulary, partition.factors,
+                                                   lifted=False, independency_test=independency_test)
             effect_clause.extend(densities)
     return vocabulary, effect_clause
 
@@ -410,7 +449,9 @@ def create_lifted_precondition(partition_key: tuple[int, int],
                                partitions: dict[tuple[int, int], S2SDataset],
                                vocabulary: UniquePredicateList,
                                k_cross: int = 50,
-                               lower_threshold: float = 0.2) \
+                               lower_threshold: float = 0.2,
+                               min_samples_split: Union[float, int] = 0.05,
+                               pos_threshold: float = 0.6) \
                                 -> tuple[UniquePredicateList, list[list[Proposition]]]:
     pre_count = []
     p_k = partitions[partition_key]
@@ -427,12 +468,14 @@ def create_lifted_precondition(partition_key: tuple[int, int],
             x_neg = x_neg[:, np.newaxis, :]
         y = np.concatenate([np.ones(x_pos.shape[0]), np.zeros(x_neg.shape[0])])
         x = np.concatenate([x_pos, x_neg])
-        min_samples_split = max(int(len(x)*0.05), 3)
+
+        if isinstance(min_samples_split, float):
+            min_samples_split = max(int(len(x)*min_samples_split), 3)
         tree = LiftedDecisionTree(vocabulary,
                                   referencable_indices=mask_indices,
                                   min_samples_split=min_samples_split)
         tree.fit(x, y)
-        preconditions = tree.extract_preconditions()
+        preconditions = tree.extract_preconditions(pos_threshold)
         for pre in preconditions:
             found = False
             for p_i in pre_count:
@@ -691,8 +734,40 @@ def find_typed_groups(schemata, vars_per_obj, n_max):
     return typed_groups
 
 
+def merge_partitions_by_map(partitions: dict[tuple[int, int], S2SDataset],
+                            merge_map: dict[tuple[int, int], tuple[int, int]]) -> dict[tuple[int, int], S2SDataset]:
+    """
+    Merge partitions by the given map.
+
+    Parameters
+    ----------
+    partitions : dict[tuple[int, int], S2SDataset]
+        The partitions.
+    merge_map : dict[tuple[int, int], tuple[int, int]]
+        The merge map.
+
+    Returns
+    -------
+    merged_partitions : dict[tuple[int, int], S2SDataset]
+        The merged partitions.
+    """
+
+    merged_partitions = {}
+    for key in partitions:
+        if key in merge_map:
+            new_key = merge_map[key]
+            if new_key not in merged_partitions:
+                merged_partitions[new_key] = deepcopy(partitions[key])
+            else:
+                merged_partitions[new_key] = _merge_partitions(merged_partitions[new_key], partitions[key])
+        else:
+            merged_partitions[key] = deepcopy(partitions[key])
+    return merged_partitions
+
+
 def _create_factored_densities(data: np.ndarray, vocabulary: UniquePredicateList,
-                               factors: list[Factor], lifted: bool = False) \
+                               factors: list[Factor], lifted: bool = False,
+                               independency_test: str = "gaussian") \
         -> list[KernelDensityEstimator]:
     """
     Create the factored densities from the given data.
@@ -705,6 +780,10 @@ def _create_factored_densities(data: np.ndarray, vocabulary: UniquePredicateList
             The vocabulary of propositions.
         factors : list[Factor]
             The factors.
+        lifted : bool
+            Whether to create lifted symbols.
+        independency_test : str
+            The method to use for testing independency.
 
     Returns
     -------
@@ -714,7 +793,7 @@ def _create_factored_densities(data: np.ndarray, vocabulary: UniquePredicateList
     # use validation samples for independency tests
     n_val = max(int(len(data) * 0.1), 3)
     densities = []
-    dependency_groups = _compute_factor_dependencies(data[-n_val:], factors, method="gaussian")
+    dependency_groups = _compute_factor_dependencies(data[-n_val:], factors, method=independency_test)
     _n_expected_symbol = sum([2**len(x)-1 for x in dependency_groups])
     logger.info(f"n_factors={len(factors)}, n_groups={len(dependency_groups)}, n_expected_symbol={_n_expected_symbol}")
     for group in dependency_groups:
@@ -1181,37 +1260,6 @@ def _find_substitution(props1, props2) -> dict[int, int]:
     if not is_used1.all() or not is_used2.all():
         return {}
     return substitution
-
-
-def _merge_partitions_by_map(partitions: dict[tuple[int, int], S2SDataset],
-                             merge_map: dict[tuple[int, int], tuple[int, int]]) -> dict[tuple[int, int], S2SDataset]:
-    """
-    Merge partitions by the given map.
-
-    Parameters
-    ----------
-    partitions : dict[tuple[int, int], S2SDataset]
-        The partitions.
-    merge_map : dict[tuple[int, int], tuple[int, int]]
-        The merge map.
-
-    Returns
-    -------
-    merged_partitions : dict[tuple[int, int], S2SDataset]
-        The merged partitions.
-    """
-
-    merged_partitions = {}
-    for key in partitions:
-        if key in merge_map:
-            new_key = merge_map[key]
-            if new_key not in merged_partitions:
-                merged_partitions[new_key] = deepcopy(partitions[key])
-            else:
-                merged_partitions[new_key] = _merge_partitions(merged_partitions[new_key], partitions[key])
-        else:
-            merged_partitions[key] = deepcopy(partitions[key])
-    return merged_partitions
 
 
 def _merge_partitions(partition_i: S2SDataset, partition_j: S2SDataset,
