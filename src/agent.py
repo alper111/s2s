@@ -2,7 +2,9 @@ import os
 import pickle
 import logging
 import subprocess
+import time
 
+import yaml
 import torch
 import numpy as np
 
@@ -37,6 +39,9 @@ class Agent:
         self.privileged = config["privileged"]
 
         os.makedirs(self.save_path, exist_ok=True)
+        with open(os.path.join(self.save_path, "config.yaml"), "w") as f:
+            config["date"] = time.strftime("%Y-%m-%d %H:%M:%S")
+            yaml.dump(config, f)
 
         if self.abstraction_method == "msa":
             self.abstraction = MarkovStateAbstraction(self.abstraction_params)
