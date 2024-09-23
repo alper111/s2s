@@ -27,6 +27,10 @@ class Agent:
                             datefmt="%H:%M:%S", force=True)
         self.logger = logging.getLogger("main")
 
+        if isinstance(config, str):
+            with open(config, "r") as f:
+                config = yaml.safe_load(f)
+
         self.env = config["env"]
         self.name = config["name"]
         self.save_path = os.path.join("save", self.env, self.name)
