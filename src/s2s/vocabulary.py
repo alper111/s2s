@@ -29,7 +29,8 @@ def build_vocabulary(partitions: dict[tuple[int, int], S2SDataset],
                      k_cross: int = 20,
                      pre_threshold: float = 0.2,
                      min_samples_split: Union[float, int] = 0.05,
-                     pos_threshold: float = 0.6
+                     pos_threshold: float = 0.6,
+                     negative_rate: int = 1
                      ) \
         -> tuple[UniquePredicateList,
                  dict[tuple[int, int], list[list[Proposition]]],
@@ -62,6 +63,8 @@ def build_vocabulary(partitions: dict[tuple[int, int], S2SDataset],
             proportion of the dataset. Otherwise, it represents the absolute number of samples. Default is 0.05.
         pos_threshold : float
             The threshold for a leaf node to be considered as a positive sample. Default is 0.6.
+        negative_rate : int
+            The rate of negative samples to generate for learning preconditions. Default is 1.
 
     Returns
     -------
@@ -120,7 +123,8 @@ def build_vocabulary(partitions: dict[tuple[int, int], S2SDataset],
         preds = create_lifted_precondition(key, partitions, vocabulary,
                                            k_cross=k_cross, lower_threshold=pre_threshold,
                                            min_samples_split=min_samples_split,
-                                           pos_threshold=pos_threshold)
+                                           pos_threshold=pos_threshold,
+                                           negative_rate=negative_rate)
         pre_props[key] = preds
         logger.info(f"Processed Pre({key[0]}-{key[1]}); {len(preds)} subpartitions, "
                     f"{sum([len(p) for p in preds])} predicates found in total.")
@@ -298,6 +302,8 @@ def create_action_schema(name: str, vocabulary: UniquePredicateList, pre_prop: l
     """
     schemas = []
     for i, pre_i in enumerate(pre_prop):
+        if len(pre_i) == 0:
+            continue
         action_schema = ActionSchema(f"{name}_{i}")
         action_schema.add_preconditions(pre_i)
 
@@ -451,7 +457,8 @@ def create_lifted_precondition(partition_key: tuple[int, int],
                                k_cross: int = 50,
                                lower_threshold: float = 0.2,
                                min_samples_split: Union[float, int] = 0.05,
-                               pos_threshold: float = 0.6) \
+                               pos_threshold: float = 0.6,
+                               negative_rate: int = 1) \
                                 -> tuple[UniquePredicateList, list[list[Proposition]]]:
     pre_count = []
     p_k = partitions[partition_key]
@@ -463,7 +470,8 @@ def create_lifted_precondition(partition_key: tuple[int, int],
         mask_indices = np.where(np.any(p_k.mask.mean(axis=0) > 0.95, axis=1))[0].tolist()
 
     for _ in range(k_cross):
-        x_neg = _generate_negative_data(partition_key, partitions, len(x_pos))
+        n_negative = len(x_pos) * negative_rate
+        x_neg = _generate_negative_data(partition_key, partitions, n_negative)
         if x_neg.ndim == 2:
             x_neg = x_neg[:, np.newaxis, :]
         y = np.concatenate([np.ones(x_pos.shape[0]), np.zeros(x_neg.shape[0])])
