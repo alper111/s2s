@@ -44,6 +44,7 @@ s2s:
   pre_threshold: 0.20
   min_samples_split: 0.05
   pos_threshold: 0.6
+  negative_rate: 1
 
 s2s_global:
   partition:
@@ -57,6 +58,7 @@ s2s_global:
   pre_threshold: 0.20
   min_samples_split: 0.05
   pos_threshold: 0.6
+  negative_rate: 1
 ```
 
 ## Outline of the code
