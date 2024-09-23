@@ -135,14 +135,15 @@ class Minecraft(gym.Env):
         obs = {}
         if self._agent_img is not None:
             block_name = self._agent_img[1]
-            obs["agent"] = {0: np.array([PRIVILEGED_MAPPING[block_name], 0, 0, 0, 0, 0])}
+            obs["agent"] = {0: np.array([1, PRIVILEGED_MAPPING[block_name], 0, 0, 0, 0, 0])}
         else:
-            obs["agent"] = {0: np.array([0, 0, 0, 0, 0, 0])}
+            obs["agent"] = {0: np.array([1, 0, 0, 0, 0, 0, 0])}
 
         obs["inventory"] = {}
         inv = self.prev_obs["inventory"]
         for i in range(9):
             obs["inventory"][i] = np.array([
+                2,
                 ALL_ITEMS.index(inv["name"][i].replace(" ", "_")),
                 int(inv["quantity"][i]),
                 0, 0, 0, 0
@@ -169,9 +170,9 @@ class Minecraft(gym.Env):
                 elif (x, y+1, z) == self.agent_pos:
                     top_exists = 2
                 neighbors = np.array([east_exists, south_exists, west_exists, north_exists, top_exists])
-                obs["objects"][key] = np.concatenate([[block], neighbors])
+                obs["objects"][key] = np.concatenate([[3, block], neighbors])
         obs["global"] = {0: np.array(self.agent_pos + (self.agent_dir,))}
-        obs["dimensions"] = {"agent": 6, "inventory": 6, "objects": 6, "global": 4}
+        obs["dimensions"] = {"agent": 7, "inventory": 7, "objects": 7, "global": 4}
         return obs
 
     @property
