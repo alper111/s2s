@@ -7,6 +7,7 @@ import torch
 import numpy as np
 
 from abstraction.msa import MarkovStateAbstraction
+from abstraction.dummy import Dummy
 from environments.minecraft import MinecraftDataset
 from environments.sokoban import SokobanDataset
 from s2s.structs import S2SDataset, PDDLDomain, PDDLProblem
@@ -33,6 +34,7 @@ class Agent:
         self.s2s_config = config["s2s"]
         self.s2s_g_config = config["s2s_global"]
         self._fd_path = config["fast_downward_path"]
+        self.privileged = config["privileged"]
 
         os.makedirs(self.save_path, exist_ok=True)
 
@@ -43,6 +45,8 @@ class Agent:
             raise NotImplementedError
         elif self.abstraction_method == "pca":
             raise NotImplementedError
+        elif self.abstraction_method == "dummy":
+            self.abstraction = Dummy(self.abstraction_params)
 
     def fit_s2s(self):
         path = os.path.join(self.save_path, "s2s")
@@ -71,7 +75,8 @@ class Agent:
                                k_cross=self.s2s_config["k_cross"],
                                pre_threshold=self.s2s_config["pre_threshold"],
                                min_samples_split=self.s2s_config["min_samples_split"],
-                               pos_threshold=self.s2s_config["pos_threshold"])
+                               pos_threshold=self.s2s_config["pos_threshold"],
+                               negative_rate=self.s2s_config["negative_rate"])
         vocabulary, pre_props, eff_props, merge_map = res
         _dump(vocabulary, os.path.join(path, "vocabulary.pkl"))
         _dump(pre_props, os.path.join(path, "pre_props.pkl"))
@@ -96,7 +101,8 @@ class Agent:
                                k_cross=self.s2s_g_config["k_cross"],
                                pre_threshold=self.s2s_g_config["pre_threshold"],
                                min_samples_split=self.s2s_g_config["min_samples_split"],
-                               pos_threshold=self.s2s_g_config["pos_threshold"])
+                               pos_threshold=self.s2s_g_config["pos_threshold"],
+                               negative_rate=self.s2s_g_config["negative_rate"])
         vocabulary_g, pre_props_g, eff_props_g, _ = res
         _dump(vocabulary_g, os.path.join(path_g, "vocabulary.pkl"))
         _dump(pre_props_g, os.path.join(path_g, "pre_props.pkl"))
@@ -205,7 +211,8 @@ class Agent:
 
     def train_abstraction(self):
         loader = self._get_loader(batch_size=self.train_config["batch_size"],
-                                  exclude_keys=["global"])
+                                  exclude_keys=["global"],
+                                  privileged=self.privileged)
         save_path = os.path.join(self.save_path, "abstraction")
         self.abstraction.fit(loader, self.train_config, save_path)
 
@@ -215,7 +222,8 @@ class Agent:
         self.abstraction.load(path)
 
     def convert_with_abstraction(self, mask_threshold=1e-4, batch_size=100):
-        loader = self._get_loader(batch_size=batch_size, transform_action=False, shuffle=False)
+        loader = self._get_loader(batch_size=batch_size, transform_action=False,
+                                  shuffle=False, privileged=self.privileged)
         self.load_abstraction()
         n_sample = len(loader.dataset)
         keys = self.abstraction.order
@@ -282,7 +290,7 @@ class Agent:
             dataset, dataset_global = self.convert_with_abstraction(mask_threshold, batch_size)
         return dataset, dataset_global
 
-    def _get_loader(self, batch_size, transform_action=True, exclude_keys=[], shuffle=True):
+    def _get_loader(self, batch_size, transform_action=True, exclude_keys=[], shuffle=True, privileged=False):
         datapath = os.path.join("data", self.env)
         if self.env == "sokoban":
             dataset_class = SokobanDataset
@@ -293,7 +301,8 @@ class Agent:
 
         dataset = dataset_class(datapath,
                                 transform_action=transform_action,
-                                exclude_keys=exclude_keys)
+                                exclude_keys=exclude_keys,
+                                privileged=privileged)
 
         loader = torch.utils.data.DataLoader(dataset,
                                              batch_size=batch_size,
