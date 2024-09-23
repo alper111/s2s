@@ -141,3 +141,20 @@ def dictarray_to_transition(state: np.ndarray, next_state: np.ndarray):
         next_state_dict[mode] = torch.stack(next_state_dict[mode])
         next_state_dict["masks"][mode] = torch.stack(next_state_dict["masks"][mode])
     return state_dict, next_state_dict
+
+
+def is_dict_equal(x1, x2):
+    modalities = list(x1.keys())
+    modalities = [m for m in modalities if m != "global" and m != "dimensions"]
+    for m in modalities:
+        keys1 = list(x1[m].keys())
+        if m not in x2:
+            return False
+        keys2 = list(x2[m].keys())
+        if set(keys1) != set(keys2):
+            return False
+
+        for k in keys1:
+            if not np.array_equal(x1[m][k], x2[m][k]):
+                return False
+    return True
