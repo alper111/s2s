@@ -18,7 +18,8 @@ class Sokoban(gym.Env):
 
     def __init__(self, map_file: str = None, size: tuple[int, int] = None, object_centric: bool = False,
                  min_crates: int = 5, max_crates: int = 5, max_steps=200, render_mode: str = None,
-                 rand_digits: bool = False, rand_agent: bool = False, rand_x: bool = False):
+                 rand_digits: bool = False, rand_agent: bool = False, rand_x: bool = False,
+                 normalize_imgs: bool = False):
         assert map_file is not None or size is not None, "Either map_file or size must be provided"
 
         self._map_file = map_file
@@ -32,6 +33,7 @@ class Sokoban(gym.Env):
         self.rand_digits = rand_digits
         self.rand_agent = rand_agent
         self.rand_x = rand_x
+        self.normalize_imgs = normalize_imgs
 
         self._shape = None
         self._window = None
@@ -88,7 +90,9 @@ class Sokoban(gym.Env):
     def agent_pos(self) -> np.ndarray:
         return self._agent_loc
 
-    def reset(self) -> np.ndarray:
+    def reset(self, seed=None) -> np.ndarray:
+        if seed is not None:
+            np.random.seed(seed)
         self._init_agent_mark()
         self._init_x_mark()
         self._init_digits()
@@ -294,9 +298,16 @@ class Sokoban(gym.Env):
                         positions.insert(0, np.array([i, j]))
             positions = np.concatenate(positions)
             entities["global"] = {0: positions}
+            if self.normalize_imgs:
+                for k in entities:
+                    if k != "global":
+                        entities[k] = entities[k] / 255.0
             return entities
         else:
-            return np.transpose(pygame.surfarray.array3d(canvas)[:, :, 0], (1, 0)).astype(np.uint8)
+            img = np.transpose(pygame.surfarray.array3d(canvas)[:, :, 0], (1, 0)).astype(np.uint8)
+            if self.normalize_imgs:
+                img = img / 255.0
+            return img
 
     def _render_tiles(self) -> list[tuple[Optional[pygame.Surface], Optional[pygame.Surface], int, int]]:
         objects = []

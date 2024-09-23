@@ -1,5 +1,42 @@
+from typing import Optional
+
 import numpy as np
 import torch
+
+
+def dict_to_tensordict(state: dict, exclude_keys: list = [], key_order: Optional[list] = None) -> tuple[dict, list]:
+    """
+    Given a state dictionary, convert it to the canonical tensor dictionary format.
+
+    Parameters
+    ----------
+    state : dict
+        The state dictionary.
+    exclude_keys : list, optional
+        The keys to exclude from the state.
+    key_order : list, optional
+        The order of keys in the state tensor.
+
+    Returns
+    -------
+    state_v : dict[torch.Tensor]
+        The state tensor dictionary.
+    key_order : list
+        The order of keys in the state tensor.
+    """
+    modalities = [m for m in state["dimensions"].keys() if m not in exclude_keys]
+    state_dict = {}
+    for mode in modalities:
+        key_order = list(state[mode].keys()) if key_order is None else key_order
+        state_arr = []
+        for key in key_order:
+            if state[mode][key] is not None:
+                state_arr.append(torch.tensor(state[mode][key], dtype=torch.float32))
+            else:
+                skolem = torch.zeros(state["dimensions"][mode], dtype=torch.float32)
+                state_arr.append(skolem)
+        state_dict[mode] = torch.stack(state_arr)
+    return state_dict, key_order
 
 
 def dict_to_transition(state: dict, next_state: dict, exclude_keys: list) \
@@ -104,3 +141,20 @@ def dictarray_to_transition(state: np.ndarray, next_state: np.ndarray):
         next_state_dict[mode] = torch.stack(next_state_dict[mode])
         next_state_dict["masks"][mode] = torch.stack(next_state_dict["masks"][mode])
     return state_dict, next_state_dict
+
+
+def is_dict_equal(x1, x2):
+    modalities = list(x1.keys())
+    modalities = [m for m in modalities if m != "global" and m != "dimensions"]
+    for m in modalities:
+        keys1 = list(x1[m].keys())
+        if m not in x2:
+            return False
+        keys2 = list(x2[m].keys())
+        if set(keys1) != set(keys2):
+            return False
+
+        for k in keys1:
+            if not np.array_equal(x1[m][k], x2[m][k]):
+                return False
+    return True

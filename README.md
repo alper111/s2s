@@ -8,6 +8,60 @@ conda activate s2s
 pip install -r requirements.txt
 ```
 
+## Example YAML configuration
+```yaml
+env: sokoban
+save_path: save/sokoban/model1
+fast_downward_path: "~/downward/fast-downward.py"
+
+abstraction:
+  method: "msa"
+  parameters:
+    input_dims:
+      - [objects, 9216]
+    action_classification_type: "softmax"
+    n_hidden: 256
+    n_latent: 16
+    n_layers: 4
+    action_dim: 4
+  training:
+    batch_size: 128
+    epoch: 1000
+    lr: 0.0001
+    device: "mps"
+    beta: 0.0
+    save_freq: 1
+    negative_rate: 1
+
+s2s:
+  partition:
+    eps: 0.5
+    mask_threshold: 0.05
+  factor_threshold: 0.05
+  density_type: "knn"
+  comparison: "l2"
+  independency_test: "gaussian"
+  k_cross: 20
+  pre_threshold: 0.20
+  min_samples_split: 0.05
+  pos_threshold: 0.6
+  negative_rate: 1
+
+s2s_global:
+  partition:
+    eps: 0.5
+    mask_threshold: 0.05
+  factor_threshold: 0.05
+  density_type: "knn"
+  comparison: "l2"
+  independency_test: "gaussian"
+  k_cross: 20
+  pre_threshold: 0.20
+  min_samples_split: 0.05
+  pos_threshold: 0.6
+  negative_rate: 1
+```
+
 ## Outline of the code
 ```
 |-- docs

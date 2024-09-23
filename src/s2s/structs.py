@@ -1018,10 +1018,10 @@ class LiftedDecisionTree:
         x = self._translate(x)
         self._build_tree(x, y)
 
-    def extract_preconditions(self):
+    def extract_preconditions(self, threshold=0.6):
         assert len(self.leaves) > 0, "Decision tree not trained yet."
         preconditions = []
-        pos_leaves = [x[0] for x in self.leaves.values() if x[1] > 0.6]
+        pos_leaves = [x[0] for x in self.leaves.values() if x[1] > threshold]
         for branch in pos_leaves:
             pre = []
             a_it = 0
