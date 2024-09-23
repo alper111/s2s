@@ -1,12 +1,15 @@
+import os
 from itertools import chain, combinations, product
 from typing import Union, Optional
 import logging
 from copy import deepcopy
 from collections import defaultdict
+from multiprocessing import Pool
 
 import numpy as np
 from scipy.spatial.distance import cdist
 from sklearn.tree import DecisionTreeClassifier, _tree
+import multiprocessing
 
 from s2s.structs import (KernelDensityEstimator, KNNDensityEstimator, UniquePredicateList,
                          Factor, Proposition, ActionSchema, S2SDataset, SupportVectorClassifier,
@@ -17,6 +20,7 @@ __author__ = 'Steve James and George Konidaris'
 # https://github.com/sd-james/skills-to-symbols/tree/master
 
 logger = logging.getLogger(__name__)
+multiprocessing.set_start_method('fork')
 
 
 def build_vocabulary(partitions: dict[tuple[int, int], S2SDataset],
@@ -119,15 +123,14 @@ def build_vocabulary(partitions: dict[tuple[int, int], S2SDataset],
     logger.info(f"Found {len(vocabulary)} unique symbols in total.")
 
     # now learn preconditions in terms of the vocabulary found in the previous step
+    full_args = []
     for key in partitions:
-        preds = create_lifted_precondition(key, partitions, vocabulary,
-                                           k_cross=k_cross, lower_threshold=pre_threshold,
-                                           min_samples_split=min_samples_split,
-                                           pos_threshold=pos_threshold,
-                                           negative_rate=negative_rate)
-        pre_props[key] = preds
-        logger.info(f"Processed Pre({key[0]}-{key[1]}); {len(preds)} subpartitions, "
-                    f"{sum([len(p) for p in preds])} predicates found in total.")
+        full_args.append((key, partitions, vocabulary, k_cross, pre_threshold, min_samples_split,
+                          pos_threshold, negative_rate))
+    with Pool(os.cpu_count()) as p:
+        results = p.starmap(create_lifted_precondition, full_args)
+    for i, key in enumerate(partitions):
+        pre_props[key] = results[i]
     return vocabulary, pre_props, eff_props, merge_map
 
 
@@ -496,6 +499,8 @@ def create_lifted_precondition(partition_key: tuple[int, int],
     pre_count = [p_i[0] for p_i in pre_count if p_i[1] > k_cross * lower_threshold]
     if len(pre_count) == 0:
         return [[]]
+    logger.info(f"Processed Pre({partition_key[0]}-{partition_key[1]}); {len(pre_count)} subpartitions, "
+                f"{sum([len(p) for p in pre_count])} predicates found in total.")
     return pre_count
 
 
