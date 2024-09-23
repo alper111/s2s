@@ -122,6 +122,7 @@ def collect_raw(n: int, env: gym.Env,
             next_state.append(deepcopy(obs))
             priv_next_state.append(deepcopy(info))
             i += 1
+            print(f"Collected {i}/{n} samples", end="\r")
 
     os.makedirs(save_folder, exist_ok=True)
     if extension != "":
