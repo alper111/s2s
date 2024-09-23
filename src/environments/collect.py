@@ -123,8 +123,6 @@ def collect_raw(n: int, env: gym.Env,
             priv_next_state.append(deepcopy(info))
             i += 1
 
-    env.close()
-
     os.makedirs(save_folder, exist_ok=True)
     if extension != "":
         extension = f"_{extension}"
@@ -134,3 +132,4 @@ def collect_raw(n: int, env: gym.Env,
     np.save(os.path.join(save_folder, f"reward{extension}.npy"), np.array(reward))
     np.save(os.path.join(save_folder, f"next_state{extension}.npy"), np.stack(next_state))
     np.save(os.path.join(save_folder, f"priv_next_state{extension}.npy"), np.stack(priv_next_state))
+    env.close()
