@@ -456,16 +456,29 @@ class Sokoban(gym.Env):
 
     @staticmethod
     def read_map(map_file: str) -> list[list[str]]:
+        available_digits = [str(i) for i in range(1, 10)]
         with open(map_file, "r") as f:
             lines = f.readlines()
         _map = []
         for line in lines:
             row = []
-            for x in line.strip():
-                if x == "0":
+            for c in line.strip():
+                if c == "0":
                     row.append(("0", " "))
+                elif c == "x":
+                    ch = np.random.choice(available_digits)
+                    available_digits.remove(ch)
+                    row.append(("0", str(ch)))
+                elif c == "*":
+                    row.append(("0", "@"))
+                elif c == "c":
+                    ch = np.random.choice(available_digits)
+                    available_digits.remove(ch)
+                    row.append((" ", str(ch)))
+                elif c == ".":
+                    row.append((" ", " "))
                 else:
-                    row.append((" ", x))
+                    row.append((" ", c))
             _map.append(row)
         return _map
 
