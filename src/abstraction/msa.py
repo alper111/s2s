@@ -34,7 +34,7 @@ class MarkovStateAbstraction(Abstraction, torch.nn.Module):
             avg_reg_loss = 0
             avg_recon_loss = 0
             for x, a, x_ in loader:
-                n = x["objects"].shape[0]
+                n = x["objects"].shape[0] * config["negative_rate"]
                 x_n, _, _ = loader.dataset.sample(n)
                 inv_loss, density_loss, reg_loss, recon_loss = self.loss(x, x_, x_n, a)
                 loss = inv_loss + density_loss + config["beta"]*reg_loss + recon_loss
@@ -194,7 +194,8 @@ class MarkovStateAbstraction(Abstraction, torch.nn.Module):
         return loss
 
     def loss(self, x, x_, x_neg, a):
-        (z, zn, z_neg), (g_z, _, _) = self.forward([x, x_, x_neg], return_gating=True)
+        (z, zn), (g_z, _) = self.forward([x, x_], return_gating=True)
+        z_neg = self.forward(x_neg)
         n_batch, n_pos, n_dim = z.shape
         n_neg = z_neg.shape[1]
 
@@ -202,8 +203,9 @@ class MarkovStateAbstraction(Abstraction, torch.nn.Module):
         xm_ = self._flatten(x_["masks"]).to(self.device)
         xm_neg = self._flatten(x_neg["masks"]).to(self.device)
 
-        z_init = z.repeat(2, 1, 1)
-        m_init = xm.repeat(2, 1)
+        rep_count = (z.shape[0] + z_neg.shape[0]) // z.shape[0]
+        z_init = z.repeat(rep_count, 1, 1)
+        m_init = xm.repeat(rep_count, 1)
 
         # if the positive and negative samples don't have the same
         # number of objects in them...
@@ -223,7 +225,7 @@ class MarkovStateAbstraction(Abstraction, torch.nn.Module):
 
         h_all = self.attn_forward(z_init, z_next, m_init, m_next)
         h_density = h_all[:, 0]  # for g(y | z, z') estimation
-        y_density = torch.cat([torch.ones(n_batch), torch.zeros(n_batch)], dim=0).to(self.device)
+        y_density = torch.cat([torch.ones(n_batch), torch.zeros(z_neg.shape[0])], dim=0).to(self.device)
         h_action = h_all[:n_batch, 1:(n_pos+2)]
         a_mask = torch.cat([torch.ones(n_batch, 1, dtype=torch.bool, device=self.device), xm], dim=1)
 

@@ -31,6 +31,7 @@ abstraction:
     device: "mps"
     beta: 0.0
     save_freq: 1
+    negative_rate: 1
 
 s2s:
   partition:
