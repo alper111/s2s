@@ -254,8 +254,7 @@ class Agent:
 
             z = z.cpu().numpy()
             zn = zn.cpu().numpy()
-            diffs = np.linalg.norm(z - zn, axis=-1)
-            m = diffs > mask_threshold
+            m = np.abs(z - zn) > mask_threshold
 
             s_global = s["global"].flatten(1, -1).numpy()
             sn_global = sn["global"].flatten(1, -1).numpy()
@@ -265,7 +264,7 @@ class Agent:
             state[it:(it+size), :n_obj] = z
             next_state[it:(it+size), :n_obj] = zn
             option[it:(it+size)] = o
-            mask[it:(it+size), :n_obj] = m.reshape(size, n_obj, 1)
+            mask[it:(it+size), :n_obj] = m
 
             state_global.append(s_global)
             next_state_global.append(sn_global)
