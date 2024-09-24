@@ -10,3 +10,6 @@ logs
 
 *.ipynb
 *.yaml
+*.out
+*.sh
+
