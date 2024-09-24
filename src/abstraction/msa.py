@@ -34,7 +34,7 @@ class MarkovStateAbstraction(Abstraction, torch.nn.Module):
             avg_reg_loss = 0
             avg_recon_loss = 0
             for x, a, x_ in loader:
-                n = x["objects"].shape[0] * config["negative_rate"]
+                n = x["objects"].shape[0]
                 x_n, _, _ = loader.dataset.sample(n)
                 inv_loss, density_loss, reg_loss, recon_loss = self.loss(x, x_, x_n, a)
                 loss = inv_loss + density_loss + config["beta"]*reg_loss + recon_loss
