@@ -31,12 +31,12 @@ abstraction:
     device: "mps"
     beta: 0.0
     save_freq: 1
-    negative_rate: 1
 
 s2s:
   partition:
     eps: 0.5
     mask_threshold: 0.05
+    min_samples: 10
   factor_threshold: 0.05
   density_type: "knn"
   comparison: "l2"
@@ -51,6 +51,7 @@ s2s_global:
   partition:
     eps: 0.5
     mask_threshold: 0.05
+    min_samples: 10
   factor_threshold: 0.05
   density_type: "knn"
   comparison: "l2"
