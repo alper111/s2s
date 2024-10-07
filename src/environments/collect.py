@@ -68,8 +68,7 @@ def collect(n: int, env: gym.Env, options: Optional[dict[str, Callable]] = None)
 
 def collect_raw(n: int, env: gym.Env,
                 options: Optional[dict[str, Callable]] = None,
-                save_folder: str = "out",
-                extension: str = "") -> None:
+                save_folder: str = "out") -> None:
     """
     Collects n samples from the environment and saves them to disk.
 
@@ -83,8 +82,6 @@ def collect_raw(n: int, env: gym.Env,
         Options to execute in the environment.
     save_folder: str, default="out"
         Folder to save the dataset.
-    extension: str, default=""
-        Extension to append to the save files.
     """
 
     state = []
@@ -122,15 +119,13 @@ def collect_raw(n: int, env: gym.Env,
             next_state.append(deepcopy(obs))
             priv_next_state.append(deepcopy(info))
             i += 1
-            print(f"Collected {i}/{n} samples", end="\r")
+            print(f"{a} Collected {i}/{n} samples", end="\r")
 
     os.makedirs(save_folder, exist_ok=True)
-    if extension != "":
-        extension = f"_{extension}"
-    np.save(os.path.join(save_folder, f"state{extension}.npy"), np.stack(state))
-    np.save(os.path.join(save_folder, f"priv_state{extension}.npy"), np.stack(priv_state))
-    pickle.dump(action, open(os.path.join(save_folder, f"action{extension}.pkl"), "wb"))
-    np.save(os.path.join(save_folder, f"reward{extension}.npy"), np.array(reward))
-    np.save(os.path.join(save_folder, f"next_state{extension}.npy"), np.stack(next_state))
-    np.save(os.path.join(save_folder, f"priv_next_state{extension}.npy"), np.stack(priv_next_state))
+    np.save(os.path.join(save_folder, "state.npy"), np.stack(state))
+    np.save(os.path.join(save_folder, "priv_state.npy"), np.stack(priv_state))
+    pickle.dump(action, open(os.path.join(save_folder, "action.pkl"), "wb"))
+    np.save(os.path.join(save_folder, "reward.npy"), np.array(reward))
+    np.save(os.path.join(save_folder, "next_state.npy"), np.stack(next_state))
+    np.save(os.path.join(save_folder, "priv_next_state.npy"), np.stack(priv_next_state))
     env.close()

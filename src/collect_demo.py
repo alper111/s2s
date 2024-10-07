@@ -29,5 +29,5 @@ if __name__ == "__main__":
     else:
         raise ValueError
 
-    save_folder = os.path.join("data", args.env)
-    collect_raw(args.n_samples, env, save_folder=save_folder, extension=args.extension)
+    save_folder = os.path.join("data", f"{args.env}{args.extension}")
+    collect_raw(args.n_samples, env, save_folder=save_folder)
