@@ -2,7 +2,7 @@ from PIL import Image
 from typing import Optional
 
 import minedojo
-from minedojo.sim.mc_meta.mc import ALL_ITEMS, ALL_CRAFT_SMELT_ITEMS
+from minedojo.sim.mc_meta.mc import ALL_CRAFT_SMELT_ITEMS
 import gym
 import numpy as np
 import torch
@@ -10,7 +10,10 @@ import torch
 from s2s.helpers import dict_to_transition
 from s2s.structs import UnorderedDataset
 
-USEFUL_ITEMS = {
+USEFUL_ITEMS = [
+    "air",
+    "log",
+    "cobblestone",
     "crafting_table",
     "planks",
     "stick",
@@ -25,7 +28,18 @@ USEFUL_ITEMS = {
     "wooden_pickaxe",
     "diamond",
     "iron_ingot",
-}
+]
+
+ATTACK_ITEMS = [
+    "wooden_axe",
+    "wooden_pickaxe",
+    "stone_axe",
+    "stone_pickaxe",
+    "iron_axe",
+    "iron_pickaxe",
+    "diamond_axe",
+    "diamond_pickaxe"
+]
 
 PRIVILEGED_MAPPING = {
     "null": 0,
@@ -104,7 +118,6 @@ class Minecraft(gym.Env):
                 south_exists = self._block_exists(x, y, z+1)
                 west_exists = self._block_exists(x-1, y, z)
                 north_exists = self._block_exists(x, y, z-1)
-                top_exists = self._block_exists(x, y+1, z)
                 if (x+1, y, z) == self.agent_pos:
                     east_exists = 2
                 elif (x, y, z+1) == self.agent_pos:
@@ -113,12 +126,10 @@ class Minecraft(gym.Env):
                     west_exists = 2
                 elif (x, y, z-1) == self.agent_pos:
                     north_exists = 2
-                elif (x, y+1, z) == self.agent_pos:
-                    top_exists = 2
-                neighbors = np.array([east_exists, south_exists, west_exists, north_exists, top_exists], dtype=np.uint8)
+                neighbors = np.array([east_exists, south_exists, west_exists, north_exists], dtype=np.uint8)
                 obs["objects"][key] = np.concatenate([img, neighbors])
         obs["global"] = {0: np.array(self.agent_pos + (self.agent_dir,))}
-        obs["dimensions"] = {"inventory": 32*32*3, "agent": 32*32*3, "objects": 32*32*3+5, "global": 4}
+        obs["dimensions"] = {"inventory": 32*32*3, "agent": 32*32*3, "objects": 32*32*3+4, "global": 4}
         return obs
 
     @property
@@ -128,6 +139,9 @@ class Minecraft(gym.Env):
     @property
     def done(self) -> bool:
         available_actions = self.available_actions()
+        teleport_exists = any([a[0] == "teleport" for a in available_actions])
+        if not teleport_exists:
+            return True
         return (len(available_actions) == 0) or (self._t >= self._max_steps)
 
     @property
@@ -135,18 +149,18 @@ class Minecraft(gym.Env):
         obs = {}
         if self._agent_img is not None:
             block_name = self._agent_img[1]
-            obs["agent"] = {0: np.array([1, PRIVILEGED_MAPPING[block_name], 0, 0, 0, 0, 0])}
+            obs["agent"] = {0: np.array([1, PRIVILEGED_MAPPING[block_name], 0, 0, 0, 0])}
         else:
-            obs["agent"] = {0: np.array([1, 0, 0, 0, 0, 0, 0])}
+            obs["agent"] = {0: np.array([1, 0, 0, 0, 0, 0])}
 
         obs["inventory"] = {}
         inv = self.prev_obs["inventory"]
         for i in range(9):
             obs["inventory"][i] = np.array([
                 2,
-                ALL_ITEMS.index(inv["name"][i].replace(" ", "_")),
+                USEFUL_ITEMS.index(inv["name"][i].replace(" ", "_")),
                 int(inv["quantity"][i]),
-                0, 0, 0, 0
+                0, 0, 0
             ])
 
         obs["objects"] = {}
@@ -158,7 +172,6 @@ class Minecraft(gym.Env):
                 south_exists = self._block_exists(x, y, z+1)
                 west_exists = self._block_exists(x-1, y, z)
                 north_exists = self._block_exists(x, y, z-1)
-                top_exists = self._block_exists(x, y+1, z)
                 if (x+1, y, z) == self.agent_pos:
                     east_exists = 2
                 elif (x, y, z+1) == self.agent_pos:
@@ -167,12 +180,10 @@ class Minecraft(gym.Env):
                     west_exists = 2
                 elif (x, y, z-1) == self.agent_pos:
                     north_exists = 2
-                elif (x, y+1, z) == self.agent_pos:
-                    top_exists = 2
-                neighbors = np.array([east_exists, south_exists, west_exists, north_exists, top_exists])
+                neighbors = np.array([east_exists, south_exists, west_exists, north_exists])
                 obs["objects"][key] = np.concatenate([[3, block], neighbors])
         obs["global"] = {0: np.array(self.agent_pos + (self.agent_dir,))}
-        obs["dimensions"] = {"agent": 7, "inventory": 7, "objects": 7, "global": 4}
+        obs["dimensions"] = {"agent": 6, "inventory": 6, "objects": 6, "global": 4}
         return obs
 
     @property
@@ -221,6 +232,7 @@ class Minecraft(gym.Env):
         return self.prev_obs["inventory"]["name"][0]
 
     def reset(self) -> dict:
+        self._block_map = {}
         obs = self._env.reset()
         self._prev_obs = obs
         self._observe_all_blocks()
@@ -229,30 +241,30 @@ class Minecraft(gym.Env):
 
     def step(self, action) -> tuple[dict, float, bool, dict]:
         action_type, action_args, object_args = action
-        action_key = (self.item_in_hand, action_type, action_args)
-        if action_key not in self._executed_actions:
-            self._executed_actions[action_key] = 0
-        self._executed_actions[action_key] += 1
 
         if action_type == "teleport":
             x, y, z = object_args[0]
             side = action_args[0]
             res = self._teleport_to_block(x, y, z, side)
         elif action_type == "attack":
-            res = self._attack_block()
+            item_name = action_args[0]
+            res = self._attack_block(item_name)
         elif action_type == "place":
             block_name = action_args[0]
             res = self._place_block(block_name)
-        elif action_type == "equip":
-            item_name = action_args[0]
-            res = self._equip_item(item_name)
         elif action_type == "craft":
             item_name = action_args[0]
             res = self._craft_item(item_name)
         else:
             raise ValueError("Invalid action type")
 
-        self._t += 1
+        if res:
+            action_key = (action_type, action_args)
+            if action_key not in self._executed_actions:
+                self._executed_actions[action_key] = 0
+            self._executed_actions[action_key] += 1
+            self._t += 1
+
         obs = self.observation
         reward = self.reward
         done = self.done
@@ -263,17 +275,27 @@ class Minecraft(gym.Env):
     def sample_action(self):
         actions = self.available_actions()
         weights = []
+        action_types = {}
         for a in actions:
-            a_item = (self.item_in_hand, a[0], a[1])
+            a_item = (a[0], a[1])
             if a_item in self._executed_actions:
                 n = self._executed_actions[a_item]
             else:
                 n = 1
-            weights.append(n)
+
+            if a_item not in action_types:
+                action_types[a_item] = (n, [])
+            action_types[a_item][1].append(a)
+
+        weights = [action_types[a][0] for a in action_types]
         weights = np.array(weights)
         weights = np.sqrt(2*np.log(np.sum(weights))/weights)
-        idx = np.random.choice(len(actions), p=weights/np.sum(weights))
-        idx = np.argmax(weights)
+        probs = weights / np.sum(weights)
+        idx = np.random.choice(len(action_types), p=probs)
+        actions = action_types.keys()
+        actions = list(actions)
+        actions = action_types[actions[idx]][1]
+        idx = np.random.choice(len(actions))
         return actions[idx]
 
     def available_actions(self):
@@ -292,18 +314,14 @@ class Minecraft(gym.Env):
                 actions.append(("teleport", ("west",), ((x, y, z),)))
             if (not self._block_map[(x, y, z-1)][0]) and self._below_support_exists(x, y, z-1):
                 actions.append(("teleport", ("north",), ((x, y, z),)))
-            if (not self._block_map[(x, y+1, z)][0]) and self._below_support_exists(x, y+1, z):
-                actions.append(("teleport", ("top",), ((x, y, z),)))
 
         if self.last_targeted_block is not None:
             # attack()
-            actions.append(("attack", (), ()))
-        for item_type in self._placeable_items():
-            # place(item_type)
-            actions.append(("place", (item_type,), ()))
-        for item_type in self._equippable_items():
-            # equip(item_type)
-            actions.append(("equip", (item_type,), ()))
+            for item_type in self._attack_items():
+                actions.append(("attack", (item_type,), ()))
+            for item_type in self._placeable_items():
+                # place(item_type)
+                actions.append(("place", (item_type,), ()))
         for item_type in self._craftable_items():
             if item_type not in USEFUL_ITEMS:
                 continue
@@ -329,18 +347,18 @@ class Minecraft(gym.Env):
             self._teleport(x-1, y, z)
         elif side == "north":
             self._teleport(x, y, z-1)
-        elif side == "top":
-            self._teleport(x, y+1, z)
         self._look_and_update_belief(x, y, z)
         return True
 
-    def _attack_block(self) -> bool:
+    def _attack_block(self, item_name: str) -> bool:
         x, y, z = self.last_targeted_block
         self._look_at_block(x, y, z)
         if self.traced_block != (x, y, z):
             return False
         exists = self._block_exists(x, y, z)
         if exists:
+            if item_name != "air":
+                self._equip_item(item_name)
             attack = Minecraft.ATTACK()
             self._step(attack)
             self._env.teleport_agent(x, y, z, 0, 0)
@@ -353,8 +371,16 @@ class Minecraft(gym.Env):
     def _place_block(self, item_name: str) -> bool:
         inventory_slot = self._get_item_index(item_name)
         ax, ay, az = self.agent_pos
-        jump = Minecraft.JUMP_AND_LOOK_DOWN()
-        self._step(jump)
+        x, y, z = self.traced_block
+        dx = ax - x
+        dz = az - z
+        target = (ax+dx, ay, az+dz)
+        # if there is a block in the teleport location, skip
+        if target in self._block_map and self._block_map[target][0]:
+            return False
+
+        self._teleport(ax+dx, ay, az+dz)
+        self._look_at_block(x, y, z, noisy=False)
 
         place_idx = Minecraft.PLACE(inventory_slot)
         self._step(place_idx)
@@ -364,10 +390,6 @@ class Minecraft(gym.Env):
             self._block_map[(ax-1, ay, az)] = (False, "air", "air")
         if (self._world_limit["xmax"] > ax) and ((ax+1, ay, az) not in self._block_map):
             self._block_map[(ax+1, ay, az)] = (False, "air", "air")
-        if (self._world_limit["ymin"] < ay) and ((ax, ay-1, az) not in self._block_map):
-            self._block_map[(ax, ay-1, az)] = (False, "air", "air")
-        if (self._world_limit["ymax"] > ay) and ((ax, ay+1, az) not in self._block_map):
-            self._block_map[(ax, ay+1, az)] = (False, "air", "air")
         if (self._world_limit["zmin"] < az) and ((ax, ay, az-1) not in self._block_map):
             self._block_map[(ax, ay, az-1)] = (False, "air", "air")
         if (self._world_limit["zmax"] > az) and ((ax, ay, az+1) not in self._block_map):
@@ -392,10 +414,12 @@ class Minecraft(gym.Env):
             return None
         return indices[0]
 
-    def _equippable_items(self):
+    def _attack_items(self):
         equip_mask = self.prev_obs["masks"]["equip"]
         item_names = np.unique(self.prev_obs["inventory"]["name"][equip_mask])
         item_names = [name.replace(" ", "_") for name in item_names]
+        item_names = [name for name in item_names if name in ATTACK_ITEMS]
+        item_names.append("air")
         return item_names
 
     def _placeable_items(self):
@@ -433,10 +457,6 @@ class Minecraft(gym.Env):
                 self._block_map[(x_i-1, y_i, z_i)] = (False, "air", "air")
             if self._world_limit["xmax"] > x_i:
                 self._block_map[(x_i+1, y_i, z_i)] = (False, "air", "air")
-            if self._world_limit["ymin"] < y_i:
-                self._block_map[(x_i, y_i-1, z_i)] = (False, "air", "air")
-            if self._world_limit["ymax"] > y_i:
-                self._block_map[(x_i, y_i+1, z_i)] = (False, "air", "air")
             if self._world_limit["zmin"] < z_i:
                 self._block_map[(x_i, y_i, z_i-1)] = (False, "air", "air")
             if self._world_limit["zmax"] > z_i:
@@ -628,10 +648,6 @@ class Minecraft(gym.Env):
         return [0, 0, 0, 12, 12, 6, 0, inv_slot_idx]
 
     @staticmethod
-    def JUMP_AND_LOOK_DOWN():
-        return [0, 0, 1, 24, 12, 0, 0, 0]
-
-    @staticmethod
     def blocks_to_xml(blocks):
         """
         Original source: https://github.com/IretonLiu/mine-pddl
@@ -671,17 +687,15 @@ class MinecraftDataset(UnorderedDataset):
         "teleport": 0,
         "attack": 1,
         "place": 2,
-        "equip": 3,
-        "craft": 4
+        "craft": 3
     }
     DIRECTION_TO_IDX = {
-        "north": 5,
-        "south": 6,
-        "east": 7,
-        "west": 8,
-        "top": 9
+        "north": 4,
+        "south": 5,
+        "east": 6,
+        "west": 7,
     }
-    ITEMS_TO_IDX = {x: i for i, x in enumerate(ALL_ITEMS, 10)}
+    ITEMS_TO_IDX = {x: i for i, x in enumerate(USEFUL_ITEMS, 8)}
 
     def __getitem__(self, idx):
         x, x_, key_order = dict_to_transition(self._state[idx], self._next_state[idx],
@@ -703,12 +717,13 @@ class MinecraftDataset(UnorderedDataset):
 
     @staticmethod
     def _actions_to_label(action, key_order):
+        n_action = len(USEFUL_ITEMS) + 8
         action_type, action_args, object_args = action
-        a_ = torch.zeros(402, dtype=torch.float32)
+        a_ = torch.zeros(n_action, dtype=torch.float32)
         a_[MinecraftDataset.ACTION_TO_IDX[action_type]] = 1
         if action_type == "teleport":
             a_[MinecraftDataset.DIRECTION_TO_IDX[action_args[0]]] = 1
-        elif action_type != "attack":
+        else:
             a_[MinecraftDataset.ITEMS_TO_IDX[action_args[0]]] = 1
 
         if len(object_args) != 0:
@@ -716,6 +731,6 @@ class MinecraftDataset(UnorderedDataset):
             target_obj = key_order.index(target_obj) + 1
         else:
             target_obj = 0
-        a = torch.zeros(len(key_order)+1, 402, dtype=torch.float32)
+        a = torch.zeros(len(key_order)+1, n_action, dtype=torch.float32)
         a[target_obj] = a_
         return a
