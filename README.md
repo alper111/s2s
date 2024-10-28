@@ -3,7 +3,7 @@ This repository contains the implementation of core methods in [From Skills to S
 
 ## Install requirements
 ```
-conda create -n s2s python=3.9 setuptools=65.5.0 wheel==0.38.4
+conda create -n s2s python=3.9 setuptools=65.5.0 wheel=0.38.4 pip=24.0
 conda activate s2s
 pip install -r requirements.txt
 ```
