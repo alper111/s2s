@@ -96,6 +96,8 @@ def partition_discrete_set(dataset: S2SDataset, min_samples: int = 1) -> dict[tu
 def partition_to_subgoal(dataset: S2SDataset,
                          other_dataset: Optional[S2SDataset] = None,
                          eps: float = 0.5,
+                         mask_eps: float = 0.1,
+                         min_samples: Union[int, float] = 10,
                          mask_threshold: float = 0.05) \
                          -> tuple[dict[tuple[int, int], S2SDataset],
                                   dict[tuple[int, int], S2SDataset]]:
@@ -110,6 +112,11 @@ def partition_to_subgoal(dataset: S2SDataset,
         Optional dataset to be partitioned with the same subgoals.
     eps : float, optional
         The epsilon value for DBSCAN clustering. Default is 0.5.
+    mask_eps : float, optional
+        The epsilon value for DBSCAN clustering on the mask. Default is 0.1.
+    min_samples : Union[int, float], optional
+        The minimum number of samples for a partition to be considered as subgoal.
+        If float, it is the fraction of the dataset. Otherwise, it is the number of samples.
     mask_threshold : float, optional
         The threshold for the change mask to be considered as a
         changing effect. Default is 0.05.
@@ -133,7 +140,9 @@ def partition_to_subgoal(dataset: S2SDataset,
     for o_i, partition_i in option_partitions.items():
         partition_i_sorted = sort_dataset(partition_i)
         flat_mask = partition_i_sorted.mask.reshape(len(partition_i_sorted.mask), -1).astype(float)
-        mask_partitions, mask_centroids = _partition(flat_mask, eps)
+        # eps is fixed to 0.1 because the mask is binary
+        # and we want a fine-grained partition
+        mask_partitions, mask_centroids = _partition(flat_mask, eps=mask_eps, min_samples=min_samples)
         it = 0
         for m_i, m_idx in mask_partitions.items():
             mask = mask_centroids[m_i] > mask_threshold
@@ -143,7 +152,7 @@ def partition_to_subgoal(dataset: S2SDataset,
             mask_reshaped = mask.reshape(partition_ij.mask[:].shape[1:])
             partition_ij.mask[:] = mask_reshaped
             abstract_effect = partition_ij.next_state[:, mask_reshaped]
-            abs_eff_partitions, _ = _partition(abstract_effect, eps)
+            abs_eff_partitions, _ = _partition(abstract_effect, eps, min_samples)
             for _, e_idx in abs_eff_partitions.items():
                 partition_ijk = S2SDataset(*partition_ij[e_idx])
                 partitions[(o_i, it)] = partition_ijk
@@ -210,7 +219,7 @@ def _merge_partitions(partitions: list[S2SDataset]) -> list[S2SDataset]:
     raise NotImplementedError
 
 
-def _partition(x: np.ndarray, eps: float = 0.5) -> dict[int, list]:
+def _partition(x: np.ndarray, eps: float = 0.5, min_samples: int = 5) -> dict[int, list]:
     """
     Partition a given numpy array with x-means clustering.
 
@@ -228,7 +237,7 @@ def _partition(x: np.ndarray, eps: float = 0.5) -> dict[int, list]:
     centroids : np.ndarray
         The final centroids.
     """
-    clustering = DBSCAN(eps=eps).fit(x)
+    clustering = DBSCAN(eps=eps, min_samples=min_samples).fit(x)
     labels = clustering.labels_
 
     partitions = {}
