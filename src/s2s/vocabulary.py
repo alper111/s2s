@@ -219,23 +219,17 @@ def build_typed_schemata(vocabulary: UniquePredicateList, schemata: list[ActionS
     for t in types:
         all_types.append((t, 'object'))
 
-    typed_vocabulary = UniquePredicateList(_l2_norm_overlapping, symbol_prefix=vocabulary._prefix)
     typed_schemata = []
-    for w in vocabulary:
-        params = [("x", sym_to_type[w])]
-        typed_vocabulary.append(w.estimator._samples, w.factors, params, masked=True, forced=True)
-    typed_vocabulary.fill_mutex_groups(vocabulary.factors)
-
     for action_schema in schemata:
         typed_action = ActionSchema(action_schema.name)
         for x in action_schema.preconditions:
-            typed_x = typed_vocabulary[x.idx]
-            typed_x = typed_x.substitute([(x.parameters[0][0], typed_x.parameters[0][1])])
+            typed_x = x.substitute([("x", None)])
+            typed_x = x.substitute([(x.parameters[0][0], sym_to_type[typed_x])])
             typed_x.sign = x.sign
             typed_action.add_preconditions([typed_x])
         for x in action_schema.effects:
-            typed_x = typed_vocabulary[x.idx]
-            typed_x = typed_x.substitute([(x.parameters[0][0], typed_x.parameters[0][1])])
+            typed_x = x.substitute([("x", None)])
+            typed_x = x.substitute([(x.parameters[0][0], sym_to_type[typed_x])])
             typed_x.sign = x.sign
             typed_action.add_effects([typed_x])
         typed_schemata.append(typed_action)
