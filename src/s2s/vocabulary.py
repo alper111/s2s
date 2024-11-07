@@ -1,5 +1,5 @@
 import os
-from itertools import chain, combinations, product
+from itertools import chain, combinations, product, permutations
 from typing import Union, Optional
 import logging
 from copy import deepcopy
