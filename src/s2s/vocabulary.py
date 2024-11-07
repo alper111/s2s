@@ -471,7 +471,7 @@ def create_lifted_precondition(partition_key: tuple[int, int],
         x_neg = _generate_negative_data(partition_key, partitions, n_negative)
         if x_neg.ndim == 2:
             x_neg = x_neg[:, np.newaxis, :]
-        y = np.concatenate([np.ones(x_pos.shape[0]), np.zeros(x_neg.shape[0])])
+        y = np.concatenate([np.ones(x_pos.shape[0], dtype=int), np.zeros(x_neg.shape[0], dtype=int)])
         x = np.concatenate([x_pos, x_neg])
 
         if isinstance(min_samples_split, float):
@@ -492,7 +492,7 @@ def create_lifted_precondition(partition_key: tuple[int, int],
                 pre_count.append([pre, 1])
     pre_count = [p_i[0] for p_i in pre_count if p_i[1] > k_cross * lower_threshold]
     if len(pre_count) == 0:
-        return [[]]
+        pre_count = [[]]
     logger.info(f"Processed Pre({partition_key[0]}-{partition_key[1]}); {len(pre_count)} subpartitions, "
                 f"{sum([len(p) for p in pre_count])} predicates found in total.")
     return pre_count
