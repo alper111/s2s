@@ -1021,7 +1021,7 @@ class LiftedDecisionTree:
     def extract_preconditions(self, threshold=0.6):
         assert len(self.leaves) > 0, "Decision tree not trained yet."
         preconditions = []
-        pos_leaves = [x[0] for x in self.leaves.values() if x[1] > threshold]
+        pos_leaves = [x[0] for x in self.leaves.values() if (x[1][1] / sum(x[1])) > threshold]
         for branch in pos_leaves:
             pre = []
             a_it = 0
@@ -1078,7 +1078,8 @@ class LiftedDecisionTree:
             (v_idx, parent), rules, x, y = queue.pop(0)
             rule, child_masks = self._compute_best_rule(x, y)
             if rule is None:
-                self.leaves[(v_idx, parent)] = (rules, y.mean())
+                y_bar = [(y == 0).sum(), (y == 1).sum()]
+                self.leaves[(v_idx, parent)] = (rules, y_bar)
                 continue
 
             self.nodes[(v_idx, parent)] = rule
@@ -1089,7 +1090,8 @@ class LiftedDecisionTree:
                     queue.append(((v_count, v_idx), rules + [child_rule], x[mask], y[mask]))
                     v_count += 1
                 elif n_child > 0:
-                    self.leaves[(v_count, v_idx)] = (rules + [child_rule], y[mask].mean())
+                    y_bar = [(y[mask] == 0).sum(), (y[mask] == 1).sum()]
+                    self.leaves[(v_count, v_idx)] = (rules + [child_rule], y_bar)
                     v_count += 1
 
     def _compute_best_rule(self, x, y):
