@@ -721,7 +721,7 @@ class MinecraftDataset(UnorderedDataset):
         action_type, action_args, object_args = action
         a_ = torch.zeros(n_action, dtype=torch.float32)
         a_[MinecraftDataset.ACTION_TO_IDX[action_type]] = 1
-        if action_type == "teleport":
+        if (action_type == "teleport") or (action_type == "teleport-ct"):
             a_[MinecraftDataset.DIRECTION_TO_IDX[action_args[0]]] = 1
         else:
             a_[MinecraftDataset.ITEMS_TO_IDX[action_args[0]]] = 1
