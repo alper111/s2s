@@ -1301,6 +1301,7 @@ class PDDLDomain:
         self.name = name
         self.vocabulary = vocabulary
         self.num_operators = len(operators)
+        self.operators = operators
         self.operator_str = "\n\n".join([str(x) for x in operators])
         self.types = types
 
