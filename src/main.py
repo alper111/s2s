@@ -4,4 +4,4 @@ from agent import Agent
 
 agent = Agent(sys.argv[1])
 agent.train_abstraction()
-agent.fit_s2s()
+agent.learn_symbols()
