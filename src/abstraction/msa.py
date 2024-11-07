@@ -25,6 +25,7 @@ class MarkovStateAbstraction(Abstraction, torch.nn.Module):
         return sum(p.numel() for p in self.parameters())
 
     def fit(self, loader, config, save_path, load_path=None):
+        print(self)
         if load_path is not None:
             self.load(load_path)
 
@@ -35,7 +36,7 @@ class MarkovStateAbstraction(Abstraction, torch.nn.Module):
             avg_reg_loss = 0
             avg_recon_loss = 0
             for x, a, x_ in tqdm(loader):
-                n = x["objects"].shape[0]
+                n = x[self._order[0]].shape[0] * 10
                 x_n, _, _ = loader.dataset.sample(n)
                 inv_loss, density_loss, reg_loss, recon_loss = self.loss(x, x_, x_n, a)
                 loss = inv_loss + density_loss + config["beta"]*reg_loss + recon_loss
