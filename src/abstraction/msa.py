@@ -33,13 +33,12 @@ class MarkovStateAbstraction(Abstraction, torch.nn.Module):
         for e in range(config["epoch"]):
             avg_inv_loss = 0
             avg_density_loss = 0
-            avg_reg_loss = 0
             avg_recon_loss = 0
             for x, a, x_ in tqdm(loader):
                 n = x[self._order[0]].shape[0] * 10
                 x_n, _, _ = loader.dataset.sample(n)
-                inv_loss, density_loss, reg_loss, recon_loss = self.loss(x, x_, x_n, a)
-                loss = inv_loss + density_loss + config["beta"]*reg_loss + recon_loss
+                inv_loss, density_loss, recon_loss = self.loss(x, x_, x_n, a)
+                loss = inv_loss + density_loss + recon_loss
 
                 optimizer.zero_grad()
                 loss.backward()
@@ -47,18 +46,16 @@ class MarkovStateAbstraction(Abstraction, torch.nn.Module):
 
                 avg_inv_loss += inv_loss.item()
                 avg_density_loss += density_loss.item()
-                avg_reg_loss += reg_loss.item()
                 avg_recon_loss += recon_loss.item()
             print(f"Epoch {e + 1}/{config['epoch']}, "
                   f"inverse={avg_inv_loss / len(loader):.5f}, "
                   f"density={avg_density_loss / len(loader):.5f}, "
-                  f"reg={avg_reg_loss / len(loader):.5f}, "
                   f"recon={avg_recon_loss / len(loader):.5f}")
 
             if (e+1) % config["save_freq"] == 0:
                 self.save(save_path)
 
-    def encode(self, x, return_gating=False):
+    def encode(self, x):
         # all this mambo jambo is just to process them in a single forward
         projs = []
         mod_tokens = []
@@ -79,37 +76,25 @@ class MarkovStateAbstraction(Abstraction, torch.nn.Module):
             projs.append(proj_i)
             mod_tokens.append(tokens)
         projs = torch.cat(projs, dim=1)
-        feats, g = self.encoder(projs)
+        feats = self.encoder(projs)
         outputs = []
-        gatings = []
         it = 0
         for tokens in mod_tokens:
             mod_outs = []
-            mod_g = []
             for t_i in tokens:
                 mod_outs.append(feats[:, it:(it+t_i)])
-                mod_g.append(g[:, it:(it+t_i)])
                 it += t_i
             outputs.append(mod_outs)
-            gatings.append(mod_g)
 
         return_feats = []
-        return_gatings = []
         for i in range(n):
             f = []
-            g = []
-            for out, gate in zip(outputs, gatings):
+            for out in outputs:
                 f.append(out[i])
-                g.append(gate[i])
             f = torch.cat(f, dim=1)
-            g = torch.cat(g, dim=1)
             return_feats.append(f)
-            return_gatings.append(g)
         if n == 1:
             return_feats = return_feats[0]
-            return_gatings = return_gatings[0]
-        if return_gating:
-            return return_feats, return_gatings
         return return_feats
 
     def attn_forward(self, z, m):
@@ -146,8 +131,8 @@ class MarkovStateAbstraction(Abstraction, torch.nn.Module):
             outs[proj_i] = out_i
         return outs
 
-    def forward(self, x, return_gating=False):
-        return self.encode(x, return_gating=return_gating)
+    def forward(self, x):
+        return self.encode(x)
 
     def inverse_loss(self, h, a):
         a_logits = self.inverse_forward(h)
@@ -188,7 +173,8 @@ class MarkovStateAbstraction(Abstraction, torch.nn.Module):
         return loss
 
     def loss(self, x, x_, x_neg, a):
-        (z, zn, z_neg), (g_z, _, _) = self.forward([x, x_, x_neg], return_gating=True)
+        z, zn = self.forward([x, x_])
+        z_neg = self.forward(x_neg)
         n_batch, n_pos, n_dim = z.shape
         n_neg = z_neg.shape[1]
 
@@ -200,9 +186,9 @@ class MarkovStateAbstraction(Abstraction, torch.nn.Module):
         # number of objects in them...
         n_remaining = n_pos - n_neg
         if n_remaining > 0:
-            zeros = torch.zeros(n_batch, n_remaining, n_dim, dtype=torch.float, device=self.device)
+            zeros = torch.zeros(z_neg.shape[0], n_remaining, n_dim, dtype=torch.float, device=self.device)
             z_neg = torch.cat([z_neg, zeros], dim=1)
-            mask_zeros = torch.zeros(n_batch, n_remaining, dtype=torch.bool, device=self.device)
+            mask_zeros = torch.zeros(z_neg.shape[0], n_remaining, dtype=torch.bool, device=self.device)
             xm_neg = torch.cat([xm_neg, mask_zeros], dim=1)
             n_neg = n_pos
         elif n_remaining < 0:
@@ -239,7 +225,6 @@ class MarkovStateAbstraction(Abstraction, torch.nn.Module):
 
         inv_loss = self.inverse_loss(h_action, a)
         density_loss = self.density_loss(h_density, y_density)
-        regularization = self.regularization(g_z)
 
         # decoding is a separate process.
         # don't backpropagate the recon loss to the encoder
@@ -248,7 +233,7 @@ class MarkovStateAbstraction(Abstraction, torch.nn.Module):
         x_bar = self.decode(z.detach(), [x[k].shape[1] for k in self.order])
         reconstruction_loss = self.reconstruction_loss(x_bar, x)
 
-        return inv_loss, density_loss, regularization, reconstruction_loss
+        return inv_loss, density_loss, reconstruction_loss
 
     def save(self, path):
         os.makedirs(path, exist_ok=True)
@@ -267,6 +252,7 @@ class MarkovStateAbstraction(Abstraction, torch.nn.Module):
         self.enc_proj = torch.nn.ModuleDict(
             {key: torch.nn.Sequential(
                 torch.nn.Linear(value, self.config["n_hidden"]),
+                torch.nn.LayerNorm(self.config["n_hidden"]),
                 torch.nn.ReLU())
              for (key, value) in self.config["input_dims"]})
 
@@ -274,10 +260,11 @@ class MarkovStateAbstraction(Abstraction, torch.nn.Module):
         enc_layers = []
         for i in range(self.config["n_layers"]):
             if i == self.config["n_layers"] - 1:
-                enc_layers.append(torch.nn.Linear(self.config["n_hidden"], self.config["n_latent"]*2))
-                enc_layers.append(GumbelGLU(hard=True))
+                enc_layers.append(torch.nn.Linear(self.config["n_hidden"], self.config["n_latent"]))
+                enc_layers.append(torch.nn.LayerNorm(self.config["n_latent"]))
             else:
                 enc_layers.append(torch.nn.Linear(self.config["n_hidden"], self.config["n_hidden"]))
+                enc_layers.append(torch.nn.LayerNorm(self.config["n_hidden"]))
                 enc_layers.append(torch.nn.ReLU())
         self.encoder = torch.nn.Sequential(*enc_layers)
 
