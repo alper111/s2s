@@ -562,5 +562,5 @@ class SokobanDataset(UnorderedDataset):
     @staticmethod
     def _actions_to_label(action, key_order):
         a = torch.zeros(len(key_order)+1, dtype=torch.long)
-        a[0] = action
+        a[0] = action+1
         return a
