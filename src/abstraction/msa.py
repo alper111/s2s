@@ -308,6 +308,172 @@ class MarkovStateAbstraction(Abstraction, torch.nn.Module):
         return torch.cat([x[k] for k in self.order], dim=1)
 
 
+class MSAFlat(Abstraction, torch.nn.Module):
+    def __init__(self, config):
+        Abstraction.__init__(self, config)
+        torch.nn.Module.__init__(self)
+        self._initialize_layers()
+
+    @property
+    def device(self):
+        return next(self.parameters()).device
+
+    @property
+    def n_parameters(self):
+        return sum(p.numel() for p in self.parameters())
+
+    def fit(self, loader, config, save_path, load_path=None):
+        print(self)
+        if load_path is not None:
+            self.load(load_path)
+
+        optimizer = torch.optim.Adam(self.parameters(), lr=config["lr"])
+        for e in range(config["epoch"]):
+            avg_inv_loss = 0
+            avg_density_loss = 0
+            avg_recon_loss = 0
+            for x, a, x_ in tqdm(loader):
+                n = x.shape[0] * 10
+                x_n, _, _ = loader.dataset.sample(n)
+                inv_loss, density_loss, recon_loss = self.loss(x, x_, x_n, a)
+                loss = inv_loss + density_loss + recon_loss
+
+                optimizer.zero_grad()
+                loss.backward()
+                optimizer.step()
+
+                avg_inv_loss += inv_loss.item()
+                avg_density_loss += density_loss.item()
+                avg_recon_loss += recon_loss.item()
+            print(f"Epoch {e + 1}/{config['epoch']}, "
+                  f"inverse={avg_inv_loss / len(loader):.5f}, "
+                  f"density={avg_density_loss / len(loader):.5f}, "
+                  f"recon={avg_recon_loss / len(loader):.5f}")
+
+            if (e+1) % config["save_freq"] == 0:
+                self.save(save_path)
+
+    def encode(self, x):
+        return self.encoder(x)
+
+    def inverse_forward(self, h):
+        return self.inverse_fc(h)
+
+    def density_forward(self, h):
+        return self.density_fc(h)
+
+    def decode(self, z):
+        # make sure the encodings are detached
+        # as we don't want to backpropagate any
+        # gradients through the decoder
+        z = z.detach()
+        x_bar = self.decoder(z)
+        return x_bar
+
+    def forward(self, x):
+        return self.encode(x.to(self.device))
+
+    def inverse_loss(self, z, zn, a):
+        z_cat = torch.cat([z, zn], dim=-1)
+        a_logits = self.inverse_forward(z_cat)
+        loss = torch.nn.functional.cross_entropy(a_logits, a.to(self.device))
+        return loss
+
+    def density_loss(self, z, zn, z_neg):
+        z_pos = torch.cat([z, zn], dim=-1)
+        rep_count = z_neg.shape[0] // z.shape[0]
+        z_rep = z.repeat_interleave(rep_count, 0)
+        z_neg = torch.cat([z_rep, z_neg], dim=-1)
+        pos_logits = self.density_forward(z_pos).flatten()
+        neg_logits = self.density_forward(z_neg).flatten()
+        y = torch.cat([torch.ones(pos_logits.shape[0]), torch.zeros(neg_logits.shape[0])], dim=0).to(self.device)
+        logits = torch.cat([pos_logits, neg_logits], dim=0)
+        loss = torch.nn.functional.binary_cross_entropy_with_logits(logits, y)
+        return loss
+
+    def regularization(self, g):
+        g = g.flatten(0, -2)
+        g_avg = g.mean(dim=0)
+        entropy = (g_avg*torch.log(g_avg+1e-12) + (1-g_avg)*torch.log(1-g_avg+1e-12))
+        y = torch.zeros_like(g)
+        l1_loss = torch.nn.functional.l1_loss(g, y, reduction="none")
+        loss = entropy.sum() + l1_loss.sum(dim=-1).mean()
+        return loss
+
+    def reconstruction_loss(self, x_pred, x_true):
+        return torch.nn.functional.mse_loss(x_pred, x_true.to(self.device))
+
+    def loss(self, x, x_, x_neg, a):
+        z = self.forward(x)
+        zn = self.forward(x_)
+        z_neg = self.forward(x_neg)
+
+        inv_loss = self.inverse_loss(z, zn, a)
+        density_loss = self.density_loss(z, zn, z_neg)
+
+        # decoding is a separate process.
+        # don't backpropagate the recon loss to the encoder
+        x_bar = self.decode(z.detach())
+        reconstruction_loss = self.reconstruction_loss(x_bar, x)
+        return inv_loss, density_loss, reconstruction_loss
+
+    def save(self, path):
+        os.makedirs(path, exist_ok=True)
+        name = os.path.join(path, "msa.pt")
+        torch.save(self.state_dict(), name)
+
+    def load(self, path):
+        name = os.path.join(path, "msa.pt")
+        self.load_state_dict(torch.load(name, map_location=self.device, weights_only=True))
+
+    def _initialize_layers(self):
+        assert len(self.config["input_dims"]) == 1
+        in_dim = self.config["input_dims"][0][1]
+
+        # encoder
+        enc_layers = [
+            torch.nn.Linear(in_dim, self.config["n_hidden"]),
+            torch.nn.LayerNorm(self.config["n_hidden"]),
+            torch.nn.ReLU(),
+        ]
+        for i in range(self.config["n_layers"]):
+            if i == self.config["n_layers"] - 1:
+                enc_layers.append(torch.nn.Linear(self.config["n_hidden"], self.config["n_latent"]))
+                enc_layers.append(torch.nn.LayerNorm(self.config["n_latent"]))
+            else:
+                enc_layers.append(torch.nn.Linear(self.config["n_hidden"], self.config["n_hidden"]))
+                enc_layers.append(torch.nn.LayerNorm(self.config["n_hidden"]))
+                enc_layers.append(torch.nn.ReLU())
+        self.encoder = torch.nn.Sequential(*enc_layers)
+
+        self.inverse_fc = torch.nn.Sequential(
+            torch.nn.Linear(2*self.config["n_latent"], self.config["n_hidden"]),
+            torch.nn.LayerNorm(self.config["n_hidden"]),
+            torch.nn.ReLU(),
+            torch.nn.Linear(self.config["n_hidden"], self.config["action_dim"])
+        )
+        self.density_fc = torch.nn.Sequential(
+            torch.nn.Linear(2*self.config["n_latent"], self.config["n_hidden"]),
+            torch.nn.LayerNorm(self.config["n_hidden"]),
+            torch.nn.ReLU(),
+            torch.nn.Linear(self.config["n_hidden"], 1)
+        )
+
+        # decoder is only for visualization purposes,
+        # has nothing to do with training abstractions
+        dec_layers = []
+        for i in range(self.config["n_layers"]):
+            if i == 0:
+                in_dim = self.config["n_latent"]
+            else:
+                in_dim = self.config["n_hidden"]
+            dec_layers.append(torch.nn.Linear(in_dim, self.config["n_hidden"]))
+            dec_layers.append(torch.nn.LayerNorm(self.config["n_hidden"]))
+            dec_layers.append(torch.nn.ReLU())
+        dec_layers.append(torch.nn.Linear(self.config["n_hidden"], self.config["input_dims"][0][1]))
+        self.decoder = torch.nn.Sequential(*dec_layers)
+
+
 class GumbelGLU(torch.nn.Module):
     def __init__(self, hard=False, T=1.0):
         super(GumbelGLU, self).__init__()
