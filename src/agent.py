@@ -8,15 +8,15 @@ import yaml
 import torch
 import numpy as np
 
-from abstraction.msa import MarkovStateAbstraction
+from abstraction.msa import MarkovStateAbstraction, MSAFlat
 from abstraction.dummy import Dummy
 from environments.minecraft import MinecraftDataset
 from environments.sokoban import SokobanDataset
+from environments.hanoi import HanoiDataset
 from s2s.structs import S2SDataset, PDDLDomain, PDDLProblem
 from s2s.factorise import factors_from_partitions
 from s2s.partition import partition_to_subgoal
-from s2s.vocabulary import (build_vocabulary, merge_partitions_by_map, build_schemata,
-                            build_typed_schemata, append_to_schemata)
+from s2s.vocabulary import build_vocabulary, build_schemata
 from s2s.helpers import dict_to_tensordict
 
 
@@ -50,6 +50,9 @@ class Agent:
         if self.abstraction_method == "msa":
             self.abstraction = MarkovStateAbstraction(self.abstraction_params)
             self.abstraction.to(self.train_config["device"])
+        elif self.abstraction_method == "msa_flat":
+            self.abstraction = MSAFlat(self.abstraction_params)
+            self.abstraction.to(self.train_config["device"])
         elif self.abstraction_method == "ae":
             raise NotImplementedError
         elif self.abstraction_method == "pca":
@@ -57,23 +60,22 @@ class Agent:
         elif self.abstraction_method == "dummy":
             self.abstraction = Dummy(self.abstraction_params)
 
-    def fit_s2s(self):
+    def learn_symbols(self):
         path = os.path.join(self.save_path, "s2s")
-        path_g = os.path.join(self.save_path, "s2s_g")
         os.makedirs(path, exist_ok=True)
-        os.makedirs(path_g, exist_ok=True)
 
-        dataset, dataset_g = self._get_abstract_dataset()
         partition_config = self.s2s_config["partition"]
-        partitions, partitions_g = partition_to_subgoal(dataset, dataset_g,
-                                                        eps=partition_config["eps"],
-                                                        mask_threshold=partition_config["mask_threshold"])
+        dataset, _ = self._get_abstract_dataset(mask_threshold=0.1)
+        partitions, _ = partition_to_subgoal(dataset,
+                                             eps=partition_config["eps"],
+                                             mask_eps=partition_config["mask_eps"],
+                                             mask_threshold=partition_config["mask_threshold"],
+                                             min_samples=partition_config["min_samples"])
         self.logger.info(f"Number of partitions={len(partitions)}")
 
         self.logger.info("Finding factors")
         factors = factors_from_partitions(partitions, threshold=self.s2s_config["factor_threshold"])
-        factors_g = factors_from_partitions(partitions_g, threshold=self.s2s_g_config["factor_threshold"])
-        self.logger.info(f"Number of factors={len(factors)}, {len(factors_g)}")
+        self.logger.info(f"Number of factors={len(factors)}")
 
         self.logger.info("Building vocabulary")
         res = build_vocabulary(partitions, factors, "s",
@@ -90,64 +92,19 @@ class Agent:
         _dump(vocabulary, os.path.join(path, "vocabulary.pkl"))
         _dump(pre_props, os.path.join(path, "pre_props.pkl"))
         _dump(eff_props, os.path.join(path, "eff_props.pkl"))
+        _dump(partitions, os.path.join(path, "partitions.pkl"))
+        _dump(merge_map, os.path.join(path, "merge_map.pkl"))
         self.logger.info(f"Vocabulary size={len(vocabulary)}")
-
-        self.logger.info("Merging global partitions w.r.t. lifted partitions")
-        partitions_g = merge_partitions_by_map(partitions_g, merge_map)
-        global_extended = {}
-        for p_i in partitions_g:
-            parts_i, _ = partition_to_subgoal(partitions_g[p_i])
-            for p_ij in parts_i:
-                global_extended[p_i + p_ij[1:]] = parts_i[p_ij]
-        partitions_g = global_extended
-
-        self.logger.info("Building global vocabulary")
-        res = build_vocabulary(partitions_g, factors_g, "p",
-                               density_type=self.s2s_g_config["density_type"],
-                               comparison=self.s2s_g_config["comparison"],
-                               factor_threshold=self.s2s_g_config["factor_threshold"],
-                               independency_test=self.s2s_g_config["independency_test"],
-                               k_cross=self.s2s_g_config["k_cross"],
-                               pre_threshold=self.s2s_g_config["pre_threshold"],
-                               min_samples_split=self.s2s_g_config["min_samples_split"],
-                               pos_threshold=self.s2s_g_config["pos_threshold"],
-                               negative_rate=self.s2s_g_config["negative_rate"])
-        vocabulary_g, pre_props_g, eff_props_g, _ = res
-        _dump(vocabulary_g, os.path.join(path_g, "vocabulary.pkl"))
-        _dump(pre_props_g, os.path.join(path_g, "pre_props.pkl"))
-        _dump(eff_props_g, os.path.join(path_g, "eff_props.pkl"))
-        self.logger.info(f"Global vocabulary size={len(vocabulary_g)}")
 
         self.logger.info("Building schemata")
         schemata = build_schemata(vocabulary, pre_props, eff_props)
-        schemata_g = build_schemata(vocabulary_g, pre_props_g, eff_props_g)
-        schemata_t, types, groups, mapping, object_types = build_typed_schemata(vocabulary, schemata)
-        schemata_a = append_to_schemata(schemata_t, schemata_g)
-        _dump(schemata, os.path.join(path, "schemata.pkl"))
-        _dump(schemata_g, os.path.join(path_g, "schemata.pkl"))
-        _dump(schemata_t, os.path.join(path, "typed_schemata.pkl"))
-        _dump(schemata_a, os.path.join(path, "schemata_a.pkl"))
-        _dump(types, os.path.join(path, "types.pkl"))
-        _dump(groups, os.path.join(path, "groups.pkl"))
-        _dump(mapping, os.path.join(path, "mapping.pkl"))
-        _dump(object_types, os.path.join(path, "object_types.pkl"))
-        self.logger.info(f"Number of action schemas={len(schemata_a)}.")
-        self.sym_to_type = mapping
-        self.object_types = object_types
-        self.domain = PDDLDomain(f"{self.env}_{self.name}", [vocabulary, vocabulary_g], schemata_a, types)
+        self.domain = PDDLDomain(f"{self.env}_{self.name}", [vocabulary], schemata, None)
 
-    def load_s2s(self):
+    def load_symbols(self):
         path = os.path.join(self.save_path, "s2s")
-        path_g = os.path.join(self.save_path, "s2s_g")
         vocabulary = _load(os.path.join(path, "vocabulary.pkl"))
-        vocabulary_g = _load(os.path.join(path_g, "vocabulary.pkl"))
-        schemata_a = _load(os.path.join(path, "schemata_a.pkl"))
-        types = _load(os.path.join(path, "types.pkl"))
-        mapping = _load(os.path.join(path, "mapping.pkl"))
-        object_types = _load(os.path.join(path, "object_types.pkl"))
-        self.sym_to_type = mapping
-        self.object_types = object_types
-        self.domain = PDDLDomain(f"{self.env}_{self.name}", [vocabulary, vocabulary_g], schemata_a, types)
+        schemata = _load(os.path.join(path, "schemata.pkl"))
+        self.domain = PDDLDomain(f"{self.env}_{self.name}", [vocabulary], schemata, None)
 
     def get_abstract_vector(self, state, key_order=None):
         x, key_order = dict_to_tensordict(state, exclude_keys=["global"], key_order=key_order)
@@ -165,28 +122,44 @@ class Agent:
         return symbols, key_order
 
     def get_symbol_grounding(self, symbol, modality, n=100):
-        z = torch.tensor(symbol.sample(n), dtype=torch.float32, device=self.abstraction.device)
+        samples = torch.tensor(symbol.sample(n), dtype=torch.float32, device=self.abstraction.device)
+        z = torch.zeros(n, self.abstraction_params["n_latent"], dtype=torch.float32, device=self.abstraction.device)
+        for f in self.domain.vocabulary[0].factors:
+            if f in symbol.factors:
+                # TODO: this will not work if the symbol is over multiple factors
+                z[:, f.variables] = samples
+            else:
+                group = self.domain.vocabulary[0].mutex_groups[f]
+                for i in range(z.shape[0]):
+                    s = int(np.random.choice(group))
+                    z[i, f.variables] = torch.tensor(self.domain.vocabulary[0][s].sample(100).mean(axis=0),
+                                                     dtype=torch.float,
+                                                     device=self.abstraction.device)
         z = z.unsqueeze(1)
         with torch.no_grad():
-            idx = self.abstraction.order.index(modality)
-            tokens = [0 for _ in range(idx)]
-            tokens.append(1)
-            x = self.abstraction.decode(z, tokens)
-            x = x[modality].squeeze().cpu().numpy()
+            if hasattr(self.abstraction, 'order'):
+                idx = self.abstraction.order.index(modality)
+                tokens = [0 for _ in range(idx)]
+                tokens.append(1)
+                x = self.abstraction.decode(z, tokens)
+                x = x[modality].squeeze().cpu().numpy()
+            else:
+                x = self.abstraction.decode(z).squeeze().cpu().numpy()
         return x
 
     def initialize_problem(self, state, goal, problem_name="p1"):
         p_init, order = self.get_symbols(state)
         p_goal, _ = self.get_symbols(goal, key_order=order)
         obj_types = {}
-        for obj in p_init:
-            if obj == "global":
-                continue
-            f_types = {self.sym_to_type[p] for p in p_init[obj]}
-            for otype in self.object_types:
-                if self.object_types[otype] == f_types:
-                    obj_types[obj] = otype
-                    break
+        if hasattr(self, "sym_to_type"):
+            for obj in p_init:
+                if obj == "global":
+                    continue
+                f_types = {self.sym_to_type[p] for p in p_init[obj]}
+                for otype in self.object_types:
+                    if self.object_types[otype] == f_types:
+                        obj_types[obj] = otype
+                        break
         problem = PDDLProblem(problem_name, self.domain.name)
         problem.initialize_from_dict(p_init, p_goal, obj_types)
         return problem
@@ -235,11 +208,17 @@ class Agent:
                                   shuffle=False, privileged=self.privileged)
         self.load_abstraction()
         n_sample = len(loader.dataset)
-        keys = self.abstraction.order
-        max_obj = max([sum([len(x[k]) for k in keys]) for x in loader.dataset._state])
+        if hasattr(self.abstraction, 'order'):
+            keys = self.abstraction.order
+            max_obj = max([sum([len(x[k]) for k in keys]) for x in loader.dataset._state])
+        else:
+            max_obj = -1
 
         n_latent = self.abstraction_params["n_latent"]
-        state = np.zeros((n_sample, max_obj, n_latent), dtype=np.float32)
+        if max_obj == -1:
+            state = np.zeros((n_sample, n_latent), dtype=np.float32)
+        else:
+            state = np.zeros((n_sample, max_obj, n_latent), dtype=np.float32)
         state_global = []
         option = np.zeros((n_sample,), dtype=object)
         next_state = np.zeros_like(state)
@@ -250,21 +229,43 @@ class Agent:
         it = 0
         for s, o, sn in loader:
             with torch.no_grad():
-                (z, zn) = self.abstraction.encode([s, sn])
+                z = self.abstraction.encode(s.to(self.abstraction.device))
+                zn = self.abstraction.encode(sn.to(self.abstraction.device))
 
             z = z.cpu().numpy()
             zn = zn.cpu().numpy()
             m = np.abs(z - zn) > mask_threshold
 
-            s_global = s["global"].flatten(1, -1).numpy()
-            sn_global = sn["global"].flatten(1, -1).numpy()
-            m_global = np.abs(s_global - sn_global) > mask_threshold
+            if isinstance(s, dict) and "global" in s:
+                s_global = s["global"].flatten(1, -1).numpy()
+                sn_global = sn["global"].flatten(1, -1).numpy()
+                m_global = np.abs(s_global - sn_global) > mask_threshold
+            else:
+                s_global = np.zeros(z.shape[0], dtype=np.float32)
+                sn_global = np.zeros_like(s_global)
+                m_global = np.zeros_like(m)
 
-            size, n_obj, _ = z.shape
-            state[it:(it+size), :n_obj] = z
-            next_state[it:(it+size), :n_obj] = zn
-            option[it:(it+size)] = o
-            mask[it:(it+size), :n_obj] = m
+            if max_obj == -1:
+                size = z.shape[0]
+                state[it:(it+size)] = z
+                next_state[it:(it+size)] = zn
+                mask[it:(it+size)] = m
+            else:
+                size, n_obj, _ = z.shape
+                state[it:(it+size), :n_obj] = z
+                next_state[it:(it+size), :n_obj] = zn
+                mask[it:(it+size), :n_obj] = m
+
+            if isinstance(o[0], tuple):
+                o_strs = []
+                for o_i in o:
+                    o_i_str = f"{o_i[0]}"
+                    if len(o_i[1]) > 0:
+                        o_i_str += f"-{'-'.join([o_ij.replace('_', '') for o_ij in o_i[1]])}"
+                    o_strs.append(o_i_str)
+                option[it:(it+size)] = o_strs
+            else:
+                option[it:(it+size)] = o
 
             state_global.append(s_global)
             next_state_global.append(sn_global)
@@ -304,6 +305,8 @@ class Agent:
             dataset_class = SokobanDataset
         elif self.env == "minecraft":
             dataset_class = MinecraftDataset
+        elif self.env == "hanoi":
+            dataset_class = HanoiDataset
         else:
             raise ValueError
 
