@@ -1230,7 +1230,8 @@ def _is_subgoal_same(subgoal1, subgoal2, vars_per_obj):
 def _find_substitution(props1, props2) -> dict[int, int]:
     """
     Given two lists of propositions, find a substitution
-    that makes them equal if there are any.
+    that makes them equal if there are any. This function
+    is called only for lifted propositions.
 
     Parameters
     ----------
@@ -1247,26 +1248,28 @@ def _find_substitution(props1, props2) -> dict[int, int]:
         exists, i.e., ```props1 == [props2[i] for i in substitution]```
         is True. Otherwise, an empty dictionary is returned.
     """
-    substitution = {}
-    is_used1 = np.zeros(len(props1), dtype=bool)
-    is_used2 = np.zeros(len(props2), dtype=bool)
-    for i, prop1 in enumerate(props1):
-        available_indices = np.where(~is_used2)[0]
-        if len(available_indices) == 0:
-            return {}
-
-        for j in available_indices:
-            prop2 = props2[j]
-            if prop1.idx == prop2.idx:
-                is_used1[i] = True
-                is_used2[j] = True
-                o_i = int(prop1.parameters[0][0][1:])
-                o_j = int(prop2.parameters[0][0][1:])
-                substitution[o_i] = o_j
-                break
-    if not is_used1.all() or not is_used2.all():
+    params1 = [p.parameters[0][0] for p in props1]
+    params2 = [p.parameters[0][0] for p in props2]
+    if len(params1) != len(params2):
         return {}
-    return substitution
+    if len(props1) != len(props2):
+        return {}
+    if set(params1) != set(params2):
+        return {}
+
+    candidate_subs = []
+    for perm in permutations(params2):
+        sub = {params1[i]: perm[i] for i in range(len(params1))}
+        candidate_subs.append(sub)
+
+    for sub in candidate_subs:
+        sub_props2 = [p.substitute([(sub[p.parameters[0][0]], None)]) for p in props2]
+        if set(props1) == set(sub_props2):
+            sub_int = {}
+            for k in sub:
+                sub_int[int(k[1:])] = int(sub[k][1:])
+            return sub_int
+    return {}
 
 
 def _merge_partitions(partition_i: S2SDataset, partition_j: S2SDataset,
