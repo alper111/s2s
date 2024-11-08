@@ -163,7 +163,7 @@ def partition_to_subgoal(dataset: S2SDataset,
                     other_partitions[(o_i, it)] = other_ijk
                 it += 1
 
-        logger.info(f"Option {o_i} has {it} abstract effects.")
+        logger.info(f"Option {o_i} has {it} abstract effects from {len(mask_centroids)} masks.")
 
     # TODO: merge partitions with intersecting initiation sets
     # partitions = _merge_partitions(partitions)
