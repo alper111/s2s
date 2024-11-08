@@ -354,7 +354,7 @@ class MSAFlat(Abstraction, torch.nn.Module):
                 self.save(save_path)
 
     def encode(self, x):
-        return self.encoder(x)
+        return self.encoder(x.to(self.device))
 
     def inverse_forward(self, h):
         return self.inverse_fc(h)

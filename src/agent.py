@@ -229,8 +229,8 @@ class Agent:
         it = 0
         for s, o, sn in loader:
             with torch.no_grad():
-                z = self.abstraction.encode(s.to(self.abstraction.device))
-                zn = self.abstraction.encode(sn.to(self.abstraction.device))
+                z = self.abstraction.encode(s)
+                zn = self.abstraction.encode(sn)
 
             z = z.cpu().numpy()
             zn = zn.cpu().numpy()
