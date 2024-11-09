@@ -1,5 +1,6 @@
 from PIL import Image
 from typing import Optional
+from collections import defaultdict
 
 import minedojo
 from minedojo.sim.mc_meta.mc import ALL_CRAFT_SMELT_ITEMS
@@ -28,6 +29,7 @@ USEFUL_ITEMS = [
     "wooden_pickaxe",
     "diamond",
     "iron_ingot",
+    "iron_ore",
 ]
 
 ATTACK_ITEMS = [
@@ -47,11 +49,58 @@ PRIVILEGED_MAPPING = {
     "wood": 2,
     "cobblestone": 3,
     "wooden planks": 4,
-    "crafting table": 5
+    "crafting table": 5,
+    "iron ore": 6,
+    "diamond ore": 7,
+    "furnace": 8,
 }
 
 
 class Minecraft(gym.Env):
+    PLAN = [
+        ("teleport", ("east",), ((-6, 4, 3),)),
+        ("attack", ("air",), ()),
+        ("teleport", ("east",), ((-6, 4, 6),)),
+        ("attack", ("air",), ()),
+        ("craft", ("planks",), ()),
+        ("craft", ("planks",), ()),
+        ("craft", ("stick",), ()),
+        ("teleport", ("east",), ((0, 4, 0),)),
+        ("craft", ("wooden_pickaxe",), ()),
+        ("teleport", ("east",), ((3, 4, 3),)),
+        ("attack", ("wooden_pickaxe",), ()),
+        ("teleport", ("east",), ((3, 4, 6),)),
+        ("attack", ("wooden_pickaxe",), ()),
+        ("teleport", ("east",), ((3, 4, 9),)),
+        ("attack", ("wooden_pickaxe",), ()),
+        ("teleport", ("east",), ((0, 4, 0),)),
+        ("craft", ("stone_pickaxe",), ()),
+        ("teleport", ("east",), ((3, 4, -3),)),
+        ("attack", ("stone_pickaxe",), ()),
+        ("teleport", ("east",), ((3, 4, -6),)),
+        ("attack", ("stone_pickaxe",), ()),
+        ("teleport", ("east",), ((3, 4, -9),)),
+        ("attack", ("stone_pickaxe",), ()),
+        ("teleport", ("east",), ((-6, 4, 9),)),
+        ("attack", ("air",), ()),
+        ("craft", ("planks",), ()),
+        ("teleport", ("east",), ((0, 4, 3),)),
+        ("craft", ("iron_ingot",), ()),
+        ("craft", ("iron_ingot",), ()),
+        ("craft", ("iron_ingot",), ()),
+        ("teleport", ("east",), ((0, 4, 0),)),
+        ("craft", ("stick",), ()),
+        ("craft", ("iron_pickaxe",), ()),
+        ("teleport", ("east",), ((-3, 4, -3),)),
+        ("attack", ("iron_pickaxe",), ()),
+        ("teleport", ("east",), ((-3, 4, -6),)),
+        ("attack", ("iron_pickaxe",), ()),
+        ("teleport", ("east",), ((-3, 4, -9),)),
+        ("attack", ("iron_pickaxe",), ()),
+        ("teleport", ("east",), ((0, 4, 0),)),
+        ("craft", ("diamond_pickaxe",), ()),
+    ]
+
     def __init__(self, world_config: dict, world_seed: int = 0, seed: int = 0, max_steps=200):
         drawing_str = None
         initial_inventory = None
@@ -70,6 +119,10 @@ class Minecraft(gym.Env):
 
         self._max_steps = max_steps
         self._t = 0
+        if np.random.rand() < 0.5:
+            self._plan_eps_idx = np.random.randint(0, len(self.PLAN))
+        else:
+            self._plan_eps_idx = len(self.PLAN) - 1
 
         self._env = minedojo.make(
             task_id="open-ended",
@@ -101,48 +154,50 @@ class Minecraft(gym.Env):
             obs["agent"] = {0: img}
         else:
             obs["agent"] = {0: None}
-        inventory_img = np.transpose(self.prev_obs["rgb"][:, 558:598, 220:580], (1, 2, 0))
-        inventory_img = Image.fromarray(inventory_img)
-        inventory_img = inventory_img.resize((32*9, 32))
-        inventory_img = np.array(inventory_img).reshape(32, 9, 32, 3)
-        inventory_img = np.transpose(inventory_img, (1, 0, 2, 3))
+
         obs["inventory"] = {}
-        for i, inv_item in enumerate(inventory_img):
-            obs["inventory"][i] = inv_item.reshape(-1)
+        inv = self.prev_obs["inventory"]
+        for i in range(36):
+            obs["inventory"][i] = np.array([
+                USEFUL_ITEMS.index(inv["name"][i].replace(" ", "_")),
+                int(inv["quantity"][i]),
+                inv["variant"][i]
+            ])
+
         obs["objects"] = {}
         for key in self._block_map:
             if self._block_map[key][0]:
-                x, y, z = key
                 img = self._block_map[key][1].copy().reshape(-1)
-                east_exists = self._block_exists(x+1, y, z)
-                south_exists = self._block_exists(x, y, z+1)
-                west_exists = self._block_exists(x-1, y, z)
-                north_exists = self._block_exists(x, y, z-1)
+                x, y, z = key
+                is_agent_near = 0
                 if (x+1, y, z) == self.agent_pos:
-                    east_exists = 2
-                elif (x, y, z+1) == self.agent_pos:
-                    south_exists = 2
-                elif (x-1, y, z) == self.agent_pos:
-                    west_exists = 2
-                elif (x, y, z-1) == self.agent_pos:
-                    north_exists = 2
-                neighbors = np.array([east_exists, south_exists, west_exists, north_exists], dtype=np.uint8)
-                obs["objects"][key] = np.concatenate([img, neighbors])
+                    is_agent_near = 1
+                is_agent_near = np.array([is_agent_near], dtype=np.uint8)
+                obs["objects"][key] = np.concatenate([img, is_agent_near])
         obs["global"] = {0: np.array(self.agent_pos + (self.agent_dir,))}
-        obs["dimensions"] = {"inventory": 32*32*3, "agent": 32*32*3, "objects": 32*32*3+4, "global": 4}
+        obs["dimensions"] = {"inventory": 3, "agent": 32*32*3, "objects": 32*32*3+1, "global": 4}
         return obs
 
     @property
     def reward(self) -> float:
-        return 0
+        return float(self._has_diamond_pickaxe())
 
     @property
     def done(self) -> bool:
+        if self._has_diamond_pickaxe():
+            return True
         available_actions = self.available_actions()
         teleport_exists = any([a[0] == "teleport" for a in available_actions])
         if not teleport_exists:
             return True
         return (len(available_actions) == 0) or (self._t >= self._max_steps)
+
+    def _has_diamond_pickaxe(self) -> bool:
+        inv = self.prev_obs["inventory"]
+        for i in range(36):
+            if inv["name"][i] == "diamond pickaxe":
+                return True
+        return False
 
     @property
     def info(self) -> dict:
@@ -237,12 +292,16 @@ class Minecraft(gym.Env):
         self._prev_obs = obs
         self._observe_all_blocks()
         self._t = 0
+        if np.random.rand() < 0.5:
+            self._plan_eps_idx = np.random.randint(0, len(self.PLAN))
+        else:
+            self._plan_eps_idx = len(self.PLAN) - 1
         return self.observation
 
     def step(self, action) -> tuple[dict, float, bool, dict]:
         action_type, action_args, object_args = action
 
-        if action_type == "teleport":
+        if (action_type == "teleport"):
             x, y, z = object_args[0]
             side = action_args[0]
             res = self._teleport_to_block(x, y, z, side)
@@ -273,30 +332,9 @@ class Minecraft(gym.Env):
         return obs, reward, done, info
 
     def sample_action(self):
-        actions = self.available_actions()
-        weights = []
-        action_types = {}
-        for a in actions:
-            a_item = (a[0], a[1])
-            if a_item in self._executed_actions:
-                n = self._executed_actions[a_item]
-            else:
-                n = 1
-
-            if a_item not in action_types:
-                action_types[a_item] = (n, [])
-            action_types[a_item][1].append(a)
-
-        weights = [action_types[a][0] for a in action_types]
-        weights = np.array(weights)
-        weights = np.sqrt(2*np.log(np.sum(weights))/weights)
-        probs = weights / np.sum(weights)
-        idx = np.random.choice(len(action_types), p=probs)
-        actions = action_types.keys()
-        actions = list(actions)
-        actions = action_types[actions[idx]][1]
-        idx = np.random.choice(len(actions))
-        return actions[idx]
+        if self._t <= self._plan_eps_idx:
+            return self.PLAN[self._t]
+        return self._get_random_action()
 
     def available_actions(self):
         actions = []
@@ -306,26 +344,21 @@ class Minecraft(gym.Env):
         for (x, y, z) in self._block_map:
             if not self._block_map[(x, y, z)][0]:
                 continue
-            if (not self._block_map[(x+1, y, z)][0]) and self._below_support_exists(x+1, y, z):
-                actions.append(("teleport", ("east",), ((x, y, z),)))
-            if (not self._block_map[(x, y, z+1)][0]) and self._below_support_exists(x, y, z+1):
-                actions.append(("teleport", ("south",), ((x, y, z),)))
-            if (not self._block_map[(x-1, y, z)][0]) and self._below_support_exists(x-1, y, z):
-                actions.append(("teleport", ("west",), ((x, y, z),)))
-            if (not self._block_map[(x, y, z-1)][0]) and self._below_support_exists(x, y, z-1):
-                actions.append(("teleport", ("north",), ((x, y, z),)))
+            actions.append(("teleport", ("east",), ((x, y, z),)))
 
+        # attack_<with_item>()
         if self.last_targeted_block is not None:
-            # attack()
-            for item_type in self._attack_items():
-                actions.append(("attack", (item_type,), ()))
-            for item_type in self._placeable_items():
-                # place(item_type)
-                actions.append(("place", (item_type,), ()))
+            # do not attack crafting table and furnace
+            if (self._agent_img[1] != "crafting table") and (self._agent_img[1] != "furnace"):
+                for item_type in self._attack_items():
+                    actions.append(("attack", (item_type,), ()))
+
+        # craft_<craftable_item>()
         for item_type in self._craftable_items():
             if item_type not in USEFUL_ITEMS:
                 continue
-            # craft(craftable_item)
+            if (item_type == "crafting_table") or (item_type == "furnace"):
+                continue
             actions.append(("craft", (item_type,), ()))
         return actions
 
@@ -408,6 +441,17 @@ class Minecraft(gym.Env):
         self._step(craft)
         return True
 
+    def _get_random_action(self):
+        actions = self.available_actions()
+        action_types = defaultdict(list)
+        for a in actions:
+            action_types[a[0]].append(a)
+        types = list(action_types.keys())
+        a_t = np.random.choice(types)
+        action_args = action_types[a_t]
+        idx = np.random.choice(len(action_args))
+        return action_args[idx]
+
     def _get_item_index(self, item_name: str) -> Optional[int]:
         indices, = np.where(self.prev_obs["inventory"]["name"] == item_name.replace("_", " "))
         if len(indices) == 0:
@@ -461,6 +505,17 @@ class Minecraft(gym.Env):
                 self._block_map[(x_i, y_i, z_i-1)] = (False, "air", "air")
             if self._world_limit["zmax"] > z_i:
                 self._block_map[(x_i, y_i, z_i+1)] = (False, "air", "air")
+
+        # place the crafting table
+        self._teleport_to_block(-1, 4, 0, "east")
+        self._place_block("crafting_table")
+        self._teleport_to_block(-1, 4, 0, "west")
+        self._attack_block("air")
+        # and the furnace
+        self._teleport_to_block(-1, 4, 3, "east")
+        self._place_block("furnace")
+        self._teleport_to_block(-1, 4, 3, "west")
+        self._attack_block("air")
 
     def _look_and_update_belief(self, x: int, y: int, z: int) -> None:
         self._look_at_block(x, y, z, noisy=True)
@@ -721,7 +776,7 @@ class MinecraftDataset(UnorderedDataset):
         action_type, action_args, object_args = action
         a_ = torch.zeros(n_action, dtype=torch.float32)
         a_[MinecraftDataset.ACTION_TO_IDX[action_type]] = 1
-        if (action_type == "teleport") or (action_type == "teleport-ct"):
+        if (action_type == "teleport"):
             a_[MinecraftDataset.DIRECTION_TO_IDX[action_args[0]]] = 1
         else:
             a_[MinecraftDataset.ITEMS_TO_IDX[action_args[0]]] = 1
