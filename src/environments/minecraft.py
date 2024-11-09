@@ -187,9 +187,6 @@ class Minecraft(gym.Env):
         if self._has_diamond_pickaxe():
             return True
         available_actions = self.available_actions()
-        teleport_exists = any([a[0] == "teleport" for a in available_actions])
-        if not teleport_exists:
-            return True
         return (len(available_actions) == 0) or (self._t >= self._max_steps)
 
     def _has_diamond_pickaxe(self) -> bool:
