@@ -119,7 +119,8 @@ def collect_raw(n: int, env: gym.Env,
             next_state.append(deepcopy(obs))
             priv_next_state.append(deepcopy(info))
             i += 1
-            print(f"{a} Collected {i}/{n} samples", end="\r")
+            if i % (n//100) == 0:
+                print(f"Collected {(100*(i/n)):.1f}%")
 
     os.makedirs(save_folder, exist_ok=True)
     np.save(os.path.join(save_folder, "state.npy"), np.stack(state))
