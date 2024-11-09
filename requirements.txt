@@ -1,4 +1,6 @@
 numpy==1.26.4
+gym[atari]==0.21.0
+gym[accept-rom-license]==0.21.0
 minedojo @ git+https://github.com/alper111/MineDojo@unlimited-power
 pygame
 scipy
