@@ -201,39 +201,30 @@ class Minecraft(gym.Env):
         obs = {}
         if self._agent_img is not None:
             block_name = self._agent_img[1]
-            obs["agent"] = {0: np.array([1, PRIVILEGED_MAPPING[block_name], 0, 0, 0, 0])}
+            obs["agent"] = {0: np.array([PRIVILEGED_MAPPING[block_name], 0, 0, 0, 0, 0])}
         else:
-            obs["agent"] = {0: np.array([1, 0, 0, 0, 0, 0])}
+            obs["agent"] = {0: np.array([0, 0, 0, 0, 0, 0])}
 
         obs["inventory"] = {}
         inv = self.prev_obs["inventory"]
         for i in range(9):
             obs["inventory"][i] = np.array([
-                2,
+                0, 0,
                 USEFUL_ITEMS.index(inv["name"][i].replace(" ", "_")),
                 int(inv["quantity"][i]),
-                0, 0, 0
+                0, 0
             ])
 
         obs["objects"] = {}
         for key in self._block_map:
             if self._block_map[key][0]:
-                x, y, z = key
                 block = PRIVILEGED_MAPPING[self._block_map[key][2]]
-                east_exists = self._block_exists(x+1, y, z)
-                south_exists = self._block_exists(x, y, z+1)
-                west_exists = self._block_exists(x-1, y, z)
-                north_exists = self._block_exists(x, y, z-1)
+                x, y, z = key
+                is_agent_near = 0
                 if (x+1, y, z) == self.agent_pos:
-                    east_exists = 2
-                elif (x, y, z+1) == self.agent_pos:
-                    south_exists = 2
-                elif (x-1, y, z) == self.agent_pos:
-                    west_exists = 2
-                elif (x, y, z-1) == self.agent_pos:
-                    north_exists = 2
-                neighbors = np.array([east_exists, south_exists, west_exists, north_exists])
-                obs["objects"][key] = np.concatenate([[3, block], neighbors])
+                    is_agent_near = 1
+                is_agent_near = np.array([is_agent_near], dtype=np.uint8)
+                obs["objects"][key] = np.concatenate([[0, 0, 0, 0, block], is_agent_near])
         obs["global"] = {0: np.array(self.agent_pos + (self.agent_dir,))}
         obs["dimensions"] = {"agent": 6, "inventory": 6, "objects": 6, "global": 4}
         return obs
@@ -763,7 +754,7 @@ class MinecraftDataset(UnorderedDataset):
 
     def _normalize_imgs(self, x):
         x["agent"] = x["agent"] / 255.0
-        x["inventory"] = x["inventory"] / 255.0
+        x["inventory"] = x["inventory"]
         x["objects"][..., :3072] = x["objects"][..., :3072] / 255.0
         return x
 
