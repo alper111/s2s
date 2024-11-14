@@ -13,6 +13,7 @@ from abstraction.dummy import Dummy
 from environments.minecraft import MinecraftDataset
 from environments.sokoban import SokobanDataset
 from environments.hanoi import HanoiDataset
+from environments.monty import MontyDataset
 from s2s.structs import S2SDataset, PDDLDomain, PDDLProblem
 from s2s.factorise import factors_from_partitions
 from s2s.partition import partition_to_subgoal
@@ -307,6 +308,8 @@ class Agent:
             dataset_class = MinecraftDataset
         elif self.env == "hanoi":
             dataset_class = HanoiDataset
+        elif self.env == "monty":
+            dataset_class = MontyDataset
         else:
             raise ValueError
 
