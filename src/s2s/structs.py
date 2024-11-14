@@ -194,16 +194,24 @@ class UnorderedDataset(torch.utils.data.Dataset):
 
 
 class FlatDataset(torch.utils.data.Dataset):
-    def __init__(self, root_folder: str, transform_action: bool = True, **kwargs):
+    def __init__(self, root_folder: str, transform_action: bool = True,
+                 transform_state: bool = False, **kwargs):
         self._root_folder = root_folder
         self._transform_action = transform_action
+        self._transform_state = transform_state
         self._state = np.load(os.path.join(root_folder, "state.npy"), allow_pickle=True)
         self._next_state = np.load(os.path.join(root_folder, "next_state.npy"), allow_pickle=True)
         self._action = pickle.load(open(os.path.join(root_folder, "action.pkl"), "rb"))
 
     def __getitem__(self, idx):
-        x = torch.tensor(self._state[idx], dtype=torch.float)
-        x_ = torch.tensor(self._next_state[idx], dtype=torch.float)
+        s = self._state[idx]
+        s_ = self._next_state[idx]
+        if self._transform_state:
+            s = s / 255.0
+            s_ = s_ / 255.0
+        x = torch.tensor(s, dtype=torch.float)
+        x_ = torch.tensor(s_, dtype=torch.float)
+
         if self._transform_action:
             a = self._actions_to_label(self._action[idx])
         else:
