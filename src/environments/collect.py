@@ -94,7 +94,8 @@ def collect_raw(n: int, env: gym.Env,
     i = 0
     while i < n:
         obs = env.reset()
-        options.reset()
+        if options is not None:
+            options.reset()
         info = env.info
         done = False
         old_obs = deepcopy(obs)
@@ -128,7 +129,7 @@ def collect_raw(n: int, env: gym.Env,
                 old_info = deepcopy(info)
                 i += 1
 
-                if i % (n//100) == 0:
+                if (n > 100) and (i % (n//100)) == 0:
                     print(f"Collected {(100*(i/n)):.1f}%")
 
     os.makedirs(save_folder, exist_ok=True)
