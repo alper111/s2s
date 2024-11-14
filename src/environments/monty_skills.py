@@ -4,6 +4,7 @@ Modified from https://github.com/camall3n/pix2sym/tree/dev
 """
 from enum import Enum
 from collections import deque
+from copy import deepcopy
 
 import numpy as np
 
@@ -168,7 +169,7 @@ def remove_rectangle(pixels, start):
 class SkillController:
     """Controller for hand-coded skills
     """
-    def __init__(self, initial_plan=None):
+    def __init__(self, initial_plan=None, eps=0.0):
         """Initialize SkillController (optionally by specifying a plan)
 
         If provided, 'plan' should be a collections.deque of options
@@ -177,7 +178,6 @@ class SkillController:
         self.frame = 0
         self.noop_max = 180
         self.noop_count = 0
-        self.option_max = 200
         self.skillFunction = {
             options.NONE: self.noop,
             options.RUN_LEFT: self.runLeft,
@@ -199,11 +199,40 @@ class SkillController:
             options.LOAD: self.load
         }
         self.nQueuedSkillsExecuted = 0
-        self.initial_plan = initial_plan if initial_plan else Plans.GetDefaultStart()
+        self.plan = initial_plan
+        self.eps = eps
+
         self.isInitialized = False
         self.lastX = deque([0] * 10)
         self.isActualRun = True
         self.wasWaiting = False
+        self.reset()
+
+    @property
+    def running_plan(self):
+        if self.initial_plan is None:
+            return False
+        return len(self.initial_plan) > 0
+
+    def __call__(self, state):
+        return self.runSkillPolicy(state)
+
+    def __len__(self):
+        return len(self.skillFunction)
+
+    def reset(self):
+        self.initialize_plan(self.plan, self.eps)
+
+    def initialize_plan(self, initial_plan, eps):
+        self.initial_plan = deepcopy(initial_plan)
+        if initial_plan is not None:
+            # with eps probability, remove some portion
+            # of the perfect plan
+            if np.random.rand() < eps:
+                drop_count = np.random.randint(len(self.initial_plan))
+                for _ in range(drop_count):
+                    self.initial_plan.pop()
+                # print(f"Updated the plan--new length={len(self.initial_plan)}")
 
     def getQueuedSkill(self, state):
         # Attempt to run the skill that is next in the queue
@@ -252,18 +281,26 @@ class SkillController:
         while self.option == options.NONE:
             skill = input('''
     Select a skill:
+    0. NONE
     1. RUN_LEFT
     2. RUN_RIGHT
-    3. JUMP_LEFT
-    4. JUMP_RIGHT
-    5. JUMP
-    6. CLIMB_UP
-    7. CLIMB_DOWN
-    8. WAIT_FOR_SKULL
+    3. RUN_LEFT3
+    4. RUN_RIGHT3
+    5. JUMP_LEFT
+    6. JUMP_RIGHT
+    7. JUMP
+    8. CLIMB_UP
+    9. CLIMB_DOWN
+    10. WAIT_FOR_SKULL
+    11. WAIT_5
+    12. WAIT_10
+    13. WAIT_1
+    14. STEP_RIGHT
+    15. STEP_LEFT
     > ''')
             try:
                 skill = int(skill)
-                if skill in range(1, 9):
+                if skill in range(16):
                     print("You selected {}.".format(options(skill).name))
                     o = options(skill)
                     (canExecute, _, _) = self.skillFunction[o](state)
@@ -281,7 +318,6 @@ class SkillController:
             return False
 
     def chooseNextSkill(self, state):
-        # self.skillPrompt(state)
         if self.initial_plan:
             try:
                 self.getQueuedSkill(state)
@@ -302,6 +338,11 @@ class SkillController:
         elif not op_valid and action == actions.NOOP:
             # Count number of NOOPs in a row if the current skill is invalid
             self.noop_count += 1
+        ###
+        # added to prevent some skill deadlocks
+        elif not self.running_plan:
+            self.noop_count += 1
+        ###
         else:
             self.noop_count = 0
         return timeout
@@ -328,6 +369,11 @@ class SkillController:
         action_frame_tuple = (action, self.option, self.frame, op_done)
         self.frame += 1
         if op_done:
+            ###
+            # added to prevent some skill deadlocks
+            if not self.running_plan:
+                self.noop_count = 0
+            ###
             self.option = options.NONE
             self.frame = 0
         return action_frame_tuple
@@ -437,7 +483,7 @@ class SkillController:
             return False
 
         if self.isActualRun:
-            rgb = state['env'].get_pixels_around_player(height=26, trim_direction=direction)
+            rgb = state[f'pixels_around_player_{direction}']
 
         on_ground = not (state['player_falling'] or state['player_jumping']) and (
             state['player_status'] in ['standing', 'running']) and not state['just_died']
@@ -546,7 +592,7 @@ class SkillController:
         action = direction
         lastFrame = False
 
-        rgb = state['env'].get_pixels_around_player(height=26, trim_direction=direction)
+        rgb = state[f'pixels_around_player_{direction}']
         ladder_below = False
         for i in range(46, 60):
             cut = rgb[i:i + 7, 12:22, :]
@@ -598,11 +644,20 @@ class SkillController:
             return False
 
         lastFrame = False
-        rgb = state['env'].get_pixels_around_player(height=26, trim_direction=actions.RIGHT)
+        rgb = state[f'pixels_around_player_{actions.RIGHT}']
         lastFrame = thar_be_enemy(rgb, 10, 15) or thar_be_enemy(rgb, 12, 17)
-        is_valid = False
-        if state['screen'] == 1 and state['player_y'] == 148:
+
+        # the perfect plan runs with a different logic
+        # where joe jumps from the rope to the platform
+        # when skull and joe have different y
+        if self.running_plan:
             is_valid = True
+        # i believe this should be the sensible precondition
+        # for this skill
+        else:
+            is_valid = False
+            if state['skull_y'] == state['player_y']:
+                is_valid = True
 
         return (is_valid, actions.NOOP, lastFrame)
 
