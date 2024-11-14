@@ -5,9 +5,11 @@ Modified from https://github.com/camall3n/pix2sym/tree/dev
 from collections import defaultdict
 
 import numpy as np
+import torch
 
 from environments.atarienv import getByte, bcd2int, AtariEnv, actions
 from environments.monty_skills import Plans, SkillController
+from s2s.structs import FlatDataset
 
 
 class MontezumaEnv(AtariEnv):
@@ -17,6 +19,19 @@ class MontezumaEnv(AtariEnv):
         super().__init__(name='montezuma', seed=seed, render_mode=render_mode)
         self.single_screen = single_screen
         self.single_life = single_life
+
+    @property
+    def observation(self):
+        obs = self.getRGBFrame().reshape(-1)
+        return obs
+
+    @property
+    def info(self):
+        return {"ram": self.getRAM()}
+
+    @property
+    def option_obs(self):
+        return self.getState()
 
     def reset(self, seed=None):
         super().reset(seed=seed)
@@ -28,9 +43,12 @@ class MontezumaEnv(AtariEnv):
         self.last_xy = np.asarray([-100, -100])
         self.should_terminate = False
         self.terminate_counter = 0
+        return self.observation
 
     def step(self, *args, **kwargs):
-        ob, reward, done, info = super().step(*args, **kwargs)
+        _, reward, done, _ = super().step(*args, **kwargs)
+        ob = self.observation
+        info = self.info
         state = self.getState()
         if self.single_screen and state['screen'] != 1:
             done = True
@@ -43,6 +61,9 @@ class MontezumaEnv(AtariEnv):
                     done = True
                 else:
                     self.terminate_counter += 1
+        if state['level'] == 1:
+            done = True
+        info["action_success"] = True
         return ob, reward, done, info
 
     def parseRAM(self, ram):
@@ -169,6 +190,8 @@ class MontezumaEnv(AtariEnv):
             18: [22, 23, 12][state['level']],
         })[state['screen']]
         state['skull_x'] = int(getByte(ram, 'af')) + skull_offset
+        state['skull_y'] = defaultdict(lambda: 148,
+                                       {1: 148, 5: 198, 18: 235})[state['screen']]
         # Note: up to some rounding, player dies when |player_x - skull_x| <= 6
         if 'skull_x' in self.state.keys():
             if state['skull_x'] - self.state['skull_x'] > 0:
@@ -184,11 +207,28 @@ class MontezumaEnv(AtariEnv):
                 self.object_vertical_dir = 'down'
         state['object_vertical_dir'] = self.object_vertical_dir
 
-        state['env'] = self
+        state['pixels_around_player'] = {}
+        state[f'pixels_around_player_{actions.LEFT}'] = self.get_pixels_around_player(player_x=x,
+                                                                                      player_y=y,
+                                                                                      height=26,
+                                                                                      trim_direction=actions.LEFT)
+        state[f'pixels_around_player_{actions.RIGHT}'] = self.get_pixels_around_player(player_x=x,
+                                                                                       player_y=y,
+                                                                                       height=26,
+                                                                                       trim_direction=actions.RIGHT)
+        state[f'pixels_around_player_{actions.DOWN}'] = self.get_pixels_around_player(player_x=x,
+                                                                                      player_y=y,
+                                                                                      height=26,
+                                                                                      trim_direction=actions.DOWN)
+        state[f'pixels_around_player_{actions.UP}'] = self.get_pixels_around_player(player_x=x,
+                                                                                    player_y=y,
+                                                                                    height=26,
+                                                                                    trim_direction=actions.UP)
+        # state['env'] = self
         self.state = state
         return state
 
-    def get_pixels_around_player(self, width=20, height=24, trim_direction=actions.INVALID):
+    def get_pixels_around_player(self, player_x, player_y, width=20, height=24, trim_direction=actions.INVALID):
         """
         Extract a window of size (width, height) around the player.
         Args:
@@ -203,7 +243,7 @@ class MontezumaEnv(AtariEnv):
         if trim_direction != actions.INVALID:
             width -= 6
         image = self.getFrame()
-        player_position = self.getState()['player_x'], self.getState()['player_y']  # - y_offset
+        player_position = player_x, player_y
         start_y, end_y = (value_to_index(player_position[1]) - height,
                           value_to_index(player_position[1]) + height)
         start_x, end_x = max(0, player_position[0] - width), player_position[0] + width
@@ -219,21 +259,8 @@ class MontezumaEnv(AtariEnv):
         return image_window
 
 
-def demo():
-    # Load a fresh environment, act, save to file
-    env = MontezumaEnv(seed=0, single_life=False, single_screen=False, render_mode="human")
-    skillController = SkillController(initial_plan=Plans.GetFullRunPlan())
-    # skillController = SkillController()
-    done = False
-    i = 0
-    for _ in range(100):
-        while not done:
-            state = env.getState()
-            action, current_option, option_frame, op_done = skillController.runSkillPolicy(state)
-            if op_done:
-                print(current_option)
-            obs, rew, done, info = env.step(action.value)
-            i += 1
-        env.reset()
-        done = False
-    env.close()
+class MontyDataset(FlatDataset):
+    @staticmethod
+    def _actions_to_label(action):
+        a = torch.tensor([action.value], dtype=torch.long)
+        return a
