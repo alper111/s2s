@@ -8,7 +8,6 @@ import numpy as np
 import torch
 
 from environments.atarienv import getByte, bcd2int, AtariEnv, actions
-from environments.monty_skills import Plans, SkillController
 from s2s.structs import FlatDataset
 
 
