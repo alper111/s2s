@@ -67,7 +67,7 @@ def collect(n: int, env: gym.Env, options: Optional[dict[str, Callable]] = None)
 
 
 def collect_raw(n: int, env: gym.Env,
-                options: Optional[dict[str, Callable]] = None,
+                options: Optional[Callable] = None,
                 save_folder: str = "out") -> None:
     """
     Collects n samples from the environment and saves them to disk.
@@ -78,8 +78,8 @@ def collect_raw(n: int, env: gym.Env,
         Number of samples to collect.
     env: BaseEnv
         Environment to collect samples from.
-    options: dict[str, Callable], default=None
-        Options to execute in the environment.
+    options: Callable, default=None
+        A callable options object to execute in the environment.
     save_folder: str, default="out"
         Folder to save the dataset.
     """
@@ -94,33 +94,42 @@ def collect_raw(n: int, env: gym.Env,
     i = 0
     while i < n:
         obs = env.reset()
+        options.reset()
         info = env.info
         done = False
+        old_obs = deepcopy(obs)
+        old_info = deepcopy(info)
 
         while (not done) and (i < n):
             if options is None:
                 a = env.sample_action()
+                o = a
+                o_n = 1
+                op_done = True
             else:
-                # TODO:
-                # select a random option o with I_o > 0
-                # execute it in a loop till it terminates
-                raise NotImplementedError
-            old_obs = deepcopy(obs)
-            old_info = deepcopy(info)
+                option_obs = env.option_obs
+                a, o, o_n, op_done = options(option_obs)
+                # print(option_obs['level'], option_obs['screen'], option_obs['score'])
+                # print(o, o_n, op_done, options.getValidSkills(option_obs))
 
             obs, rew, done, info = env.step(a)
             if not info.pop("action_success"):
                 continue
 
-            state.append(old_obs)
-            priv_state.append(old_info)
-            action.append(a)
-            reward.append(rew)
-            next_state.append(deepcopy(obs))
-            priv_next_state.append(deepcopy(info))
-            i += 1
-            if i % (n//100) == 0:
-                print(f"Collected {(100*(i/n)):.1f}%")
+            if op_done:
+                # print(f"Remaining options {len(options.initial_plan)}")
+                state.append(old_obs)
+                priv_state.append(old_info)
+                action.append(o)
+                reward.append(rew)
+                next_state.append(deepcopy(obs))
+                priv_next_state.append(deepcopy(info))
+                old_obs = deepcopy(obs)
+                old_info = deepcopy(info)
+                i += 1
+
+                if i % (n//100) == 0:
+                    print(f"Collected {(100*(i/n)):.1f}%")
 
     os.makedirs(save_folder, exist_ok=True)
     np.save(os.path.join(save_folder, "state.npy"), np.stack(state))
