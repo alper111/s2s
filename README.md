@@ -93,7 +93,7 @@ state["objects"][(7, 4, 5)] = np.zeros(state["dimensions"]["objects"])
 # skolem for "slot2" in next_state
 next_state["inventory"]["slot2"] = np.zeros(state["dimensions"]["inventory"])
 ```
-These are automatically added when there is a key mismatch in the tuple---you don't need to manually add these vectors (see `s2s.helpers` for details).
+These are automatically added when there is a key mismatch in the tuple---you don't need to manually add these vectors (see `s2s.helpers` for details). Notice that keys can be of any datatype as long as they implement `__eq__` method.
 
 ## Running the code
 Once the dataset class is ready, add its definition to `agent._get_loader` and use `python main.py <yaml_file>` to train and run MSA&S2S pipeline. All hyperparameters of MSA and S2S are collected in a single yaml file.
