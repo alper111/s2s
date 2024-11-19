@@ -163,6 +163,6 @@ s2s:
 
 ## References
 [1]<a name="1"></a> Konidaris, G., Kaelbling, L. P., & Lozano-Perez, T. (2018). From skills to symbols: Learning symbolic representations for abstract high-level planning. Journal of Artificial Intelligence Research, 61, 215-289.  
-[2]<a name="2"></a> Allen, C., Parikh, N., Gottesman, O., & Konidaris, G. (2021). Learning markov state abstractions for deep reinforcement learning. Advances in Neural Information Processing Systems, 34, 8229-8241.
+[2]<a name="2"></a> Allen, C., Parikh, N., Gottesman, O., & Konidaris, G. (2021). Learning markov state abstractions for deep reinforcement learning. Advances in Neural Information Processing Systems, 34, 8229-8241.  
 [3]<a name="3"></a> https://scikit-learn.org/stable/modules/generated/sklearn.cluster.DBSCAN.html.  
 [4]<a name="4"></a> Lopez-Paz, D., & Oquab, M. (2016). Revisiting classifier two-sample tests. arXiv preprint arXiv:1610.06545.
