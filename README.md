@@ -26,7 +26,7 @@ Save your $(s, a, s')$ transitions in `state.npy`, `action.pkl`, `next_state.npy
 
 ### Unordered Dataset
 This is for cases where we have access to object-factored observations and can track objects across timesteps. The only difference is the state representation:
-```json
+```
 state = {
     "modality1": {
         entity1_id: np.ndarray,
@@ -48,7 +48,7 @@ state = {
 }
 ```
 The code expects that entity ids are the same in a single $(s, a, s')$ tuple. If there is a key mismatch, the code treats that difference as a removal or addition of a new element and creates skolem objects. For instance in Minecraft, imagine we place a block from the inventory and there is a new block object in the environment, and the item in the inventory is removed. The dictionaries will be as follows.
-```python
+```
 state = {
   "objects": {
     (0, 4, 3): <obj1img>,
