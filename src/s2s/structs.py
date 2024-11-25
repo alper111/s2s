@@ -195,13 +195,19 @@ class UnorderedDataset(torch.utils.data.Dataset):
 
 class FlatDataset(torch.utils.data.Dataset):
     def __init__(self, root_folder: str, transform_action: bool = True,
-                 transform_state: bool = False, **kwargs):
+                 transform_state: bool = False, n: int = 0, **kwargs):
         self._root_folder = root_folder
         self._transform_action = transform_action
         self._transform_state = transform_state
-        self._state = np.load(os.path.join(root_folder, "state.npy"), allow_pickle=True)
-        self._next_state = np.load(os.path.join(root_folder, "next_state.npy"), allow_pickle=True)
         self._action = pickle.load(open(os.path.join(root_folder, "action.pkl"), "rb"))
+        if n > 0:
+            r = np.random.permutation(len(self._action))[:n]
+            self._state = np.load(os.path.join(root_folder, "state.npy"), allow_pickle=True)[r]
+            self._next_state = np.load(os.path.join(root_folder, "next_state.npy"), allow_pickle=True)[r]
+            self._action = [self._action[i] for i in r]
+        else:
+            self._state = np.load(os.path.join(root_folder, "state.npy"), allow_pickle=True)
+            self._next_state = np.load(os.path.join(root_folder, "next_state.npy"), allow_pickle=True)
 
     def __getitem__(self, idx):
         s = self._state[idx]
