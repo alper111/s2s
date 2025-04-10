@@ -101,27 +101,30 @@ Once the dataset class is ready, add its definition to `agent._get_loader` and u
 ### Example YAML configuration
 ```yaml
 env: sokoban
+name: model_name
 save_path: save/sokoban/model1
 fast_downward_path: "~/downward/fast-downward.py"
+privileged: false                           # only valid if privileged info is available
 
 abstraction:
   method: "msa"                             # the abstraction method. only `msa` atm.
-  parameters:
-    input_dims:
-      - [agent, 3072]                       # input dimensionality of the `agent` modality.
-      - [inventory, 3]
-      - [objects, 3073]
-    action_classification_type: "sigmoid"   # or `softmax` if vectors are one-hot.
-    n_hidden: 256                           # number of hidden units
-    n_latent: 16                            # dimensionality of encoder outputs
-    n_layers: 4                             # number of MLP layers
-    action_dim: 26                          # dimensionality of action vectors
-  training:
-    batch_size: 128
-    epoch: 1000
-    lr: 0.0001
-    device: "cuda"
-    save_freq: 1
+  input_dims:
+    - [agent, 3072]                         # input dimensionality of the `agent` modality.
+    - [inventory, 3]
+    - [objects, 3073]
+  action_classification_type: "sigmoid"     # or `softmax` if vectors are one-hot.
+  n_hidden: 256                             # number of hidden units
+  n_latent: 16                              # dimensionality of encoder outputs
+  n_layers: 4                               # number of MLP layers
+  action_dim: 26                            # dimensionality of action vectors
+  batch_size: 128
+  epoch: 1000
+  lr: 0.0001
+  device: "cuda"
+  save_freq: 1
+  negative_rate: 10                         # negative sampling rate while training MSA
+  smoothness_coeff: 0.1                     # ||z-z'|| smoothness coefficient for MSA
+  mi_coeff: 0.0                             # experimental MI coeff for factorized encodings
 
 s2s:
   partition:
