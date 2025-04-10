@@ -35,11 +35,8 @@ class Agent:
         self.env = config["env"]
         self.name = config["name"]
         self.save_path = os.path.join("save", self.env, self.name)
-        self.abstraction_method = config["abstraction"]["method"]
-        self.abstraction_params = config["abstraction"]["parameters"]
-        self.train_config = config["abstraction"]["training"]
+        self.abstraction_config = config["abstraction"]
         self.s2s_config = config["s2s"]
-        self.s2s_g_config = config["s2s_global"]
         self._fd_path = config["fast_downward_path"]
         self.privileged = config["privileged"]
 
@@ -48,25 +45,25 @@ class Agent:
             config["date"] = time.strftime("%Y-%m-%d %H:%M:%S")
             yaml.dump(config, f)
 
-        if self.abstraction_method == "msa":
-            self.abstraction = MarkovStateAbstraction(self.abstraction_params)
-            self.abstraction.to(self.train_config["device"])
-        elif self.abstraction_method == "msa_flat":
-            self.abstraction = MSAFlat(self.abstraction_params)
-            self.abstraction.to(self.train_config["device"])
-        elif self.abstraction_method == "ae":
+        if self.abstraction_config["method"] == "msa":
+            self.abstraction = MarkovStateAbstraction(self.abstraction_config)
+            self.abstraction.to(self.abstraction_config["device"])
+        elif self.abstraction_config["method"] == "msa_flat":
+            self.abstraction = MSAFlat(self.abstraction_config)
+            self.abstraction.to(self.abstraction_config["device"])
+        elif self.abstraction_config["method"] == "ae":
             raise NotImplementedError
-        elif self.abstraction_method == "pca":
+        elif self.abstraction_config["method"] == "pca":
             raise NotImplementedError
-        elif self.abstraction_method == "dummy":
-            self.abstraction = Dummy(self.abstraction_params)
+        elif self.abstraction_config["method"] == "dummy":
+            self.abstraction = Dummy(self.abstraction_config)
 
-    def learn_symbols(self):
+    def learn_symbols(self, loader=None):
         path = os.path.join(self.save_path, "s2s")
         os.makedirs(path, exist_ok=True)
 
         partition_config = self.s2s_config["partition"]
-        dataset, _ = self._get_abstract_dataset(mask_threshold=0.1)
+        dataset, _ = self._get_abstract_dataset(loader, mask_threshold=0.1)
         partitions, _ = partition_to_subgoal(dataset,
                                              eps=partition_config["eps"],
                                              mask_eps=partition_config["mask_eps"],
@@ -100,6 +97,7 @@ class Agent:
         self.logger.info("Building schemata")
         schemata = build_schemata(vocabulary, pre_props, eff_props)
         self.domain = PDDLDomain(f"{self.env}_{self.name}", [vocabulary], schemata, None)
+        _dump(schemata, os.path.join(path, "schemata.pkl"))
 
     def load_symbols(self):
         path = os.path.join(self.save_path, "s2s")
@@ -124,7 +122,7 @@ class Agent:
 
     def get_symbol_grounding(self, symbol, modality, n=100):
         samples = torch.tensor(symbol.sample(n), dtype=torch.float32, device=self.abstraction.device)
-        z = torch.zeros(n, self.abstraction_params["n_latent"], dtype=torch.float32, device=self.abstraction.device)
+        z = torch.zeros(n, self.abstraction_config["n_latent"], dtype=torch.float32, device=self.abstraction.device)
         for f in self.domain.vocabulary[0].factors:
             if f in symbol.factors:
                 # TODO: this will not work if the symbol is over multiple factors
@@ -192,21 +190,23 @@ class Agent:
                     plan = [(x[0].split("_")[1], x[1:]) for x in plan]
         return plan
 
-    def train_abstraction(self):
-        loader = self._get_loader(batch_size=self.train_config["batch_size"],
-                                  exclude_keys=["global"],
-                                  privileged=self.privileged)
+    def train_abstraction(self, train_loader=None, val_loader=None):
+        if train_loader is None:
+            train_loader = self._get_loader(batch_size=self.abstraction_config["batch_size"],
+                                            exclude_keys=["global"],
+                                            privileged=self.privileged)
         save_path = os.path.join(self.save_path, "abstraction")
-        self.abstraction.fit(loader, self.train_config, save_path)
+        self.abstraction.fit(train_loader, val_loader, save_path)
 
     def load_abstraction(self):
         self.logger.info("Loading abstraction model")
         path = os.path.join(self.save_path, "abstraction")
         self.abstraction.load(path)
 
-    def convert_with_abstraction(self, mask_threshold=1e-4, batch_size=100):
-        loader = self._get_loader(batch_size=batch_size, transform_action=False,
-                                  shuffle=False, privileged=self.privileged)
+    def convert_with_abstraction(self, loader=None, mask_threshold=1e-4, batch_size=100):
+        if loader is None:
+            loader = self._get_loader(batch_size=batch_size, transform_action=False,
+                                      shuffle=False, privileged=self.privileged)
         self.load_abstraction()
         n_sample = len(loader.dataset)
         if hasattr(self.abstraction, 'order'):
@@ -215,7 +215,7 @@ class Agent:
         else:
             max_obj = -1
 
-        n_latent = self.abstraction_params["n_latent"]
+        n_latent = self.abstraction_config["n_latent"]
         if max_obj == -1:
             state = np.zeros((n_sample, n_latent), dtype=np.float32)
         else:
@@ -261,7 +261,7 @@ class Agent:
                 o_strs = []
                 for o_i in o:
                     o_i_str = f"{o_i[0]}"
-                    if len(o_i[1]) > 0:
+                    if isinstance(o_i[1], tuple) and len(o_i[1]) > 0:
                         o_i_str += f"-{'-'.join([o_ij.replace('_', '') for o_ij in o_i[1]])}"
                     o_strs.append(o_i_str)
                 option[it:(it+size)] = o_strs
@@ -287,7 +287,7 @@ class Agent:
         _dump(dataset_global, os.path.join(local_data_path, "global.pkl"))
         return dataset, dataset_global
 
-    def _get_abstract_dataset(self, mask_threshold=1e-4, batch_size=100):
+    def _get_abstract_dataset(self, loader=None, mask_threshold=1e-4, batch_size=100):
         local_data_path = os.path.join(self.save_path, "datasets")
         data_file = os.path.join(local_data_path, "abs_dataset.pkl")
         data_file_global = os.path.join(local_data_path, "global.pkl")
@@ -297,7 +297,7 @@ class Agent:
             dataset_global = _load(data_file_global)
         else:
             self.logger.info("Converting dataset with abstraction")
-            dataset, dataset_global = self.convert_with_abstraction(mask_threshold, batch_size)
+            dataset, dataset_global = self.convert_with_abstraction(loader, mask_threshold, batch_size)
         return dataset, dataset_global
 
     def _get_loader(self, batch_size, transform_action=True, exclude_keys=[], shuffle=True, privileged=False):
